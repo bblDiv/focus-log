@@ -2,7 +2,7 @@
 /* Focus Log — everything lives in localStorage under one versioned key. No network calls. */
 
 const KEY = 'focusLog';
-const SCHEMA = 2;
+const SCHEMA = 3;
 const MID_MS = 3 * 60000; // a booster added later than this counts as "mid-session"
 const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 const GREY = '#8d7f72';
@@ -61,6 +61,7 @@ function defaults() {
     tags: mk(['N-Method', 'E-Boost', 'Music'], ['#9085e9', '#d95926', '#d55181']),
     sessions: [],
     goals: { daily: 2, weekly: 12, subjects: {} },
+    deleted: {}, metaU: 0,
     settings: { pin: null, theme: 'coffee', neglectDays: 7, lastSubject: null, lastType: null },
     active: null
   };
@@ -75,6 +76,7 @@ function migrate(d) {
     d.tags = d.tags.filter(t => !gone.has(t.id));
     for (const x of [...d.sessions, d.active]) if (x && x.tags) x.tags = x.tags.filter(t => !gone.has(t.id));
   }
+  d.deleted ||= {}; d.metaU ||= 0; // v3: sync bookkeeping (when things were deleted / when goals and theme last changed)
   d.goals = Object.assign(def.goals, d.goals); d.goals.subjects ||= {};
   d.settings = Object.assign(def.settings, d.settings);
   d.sessions.forEach(s => { s.tags ||= []; });
@@ -86,9 +88,10 @@ function load() {
   try { d = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* corrupt → start fresh */ }
   return migrate(d && typeof d === 'object' ? d : defaults());
 }
-function save() {
+function saveLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Could not save — storage full?'); }
 }
+function save() { saveLocal(); scheduleSync(); }
 let db = load();
 applyTheme();
 
@@ -182,6 +185,7 @@ const ICONS = {
   trend: '<path d="M3 17l6-6 4 4 8-8M15 7h6v6"/>',
   note: '<path d="M5 5h14v10l-4 4H5zM15 19v-4h4M8 9h8M8 12.5h5"/>',
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  cloud: '<path d="M7 18a4 4 0 0 1-.5-8A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/>',
   cup: '<path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5zM16 10h2a2.5 2.5 0 0 1 0 5h-2M8 3v3M12 3v3"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M9 9.5v1M15 9.5v1M8 14q4 4 8 0"/>',
   alert: '<path d="M12 4l9 16H3zM12 10v4.5M12 17.5v.5"/>',
@@ -311,11 +315,11 @@ function tick() {
   ring.style.strokeDashoffset = RING_C * (1 - frac); ring.classList.toggle('done', !!a.planned && frac >= 1);
 }
 setInterval(tick, 500);
-// Coming back to the app on a new day: last night's sleep and the "today" numbers must start over.
+// Coming back to the app: pull what the other device logged. On a new day, last night's sleep and the "today" numbers must start over.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (ui.startDay !== dayKey(Date.now()) && !db.active && !ui.modal) { freshStart(); render(); }
-  tick();
+  tick(); syncNow();
 });
 
 /* ================= STATS ================= */
@@ -759,7 +763,7 @@ function viewHistory() {
 
 /* ================= SETTINGS ================= */
 // iOS-style: a grouped list on the root page, each row drills into its own page.
-const SET_PAGES = { theme: 'Theme', subjects: 'Subjects', types: 'Types of work', tags: 'Boosters', goals: 'Goals', backup: 'Backup & export', pin: 'PIN lock', demo: 'Demo data' };
+const SET_PAGES = { sync: 'Sync across devices', theme: 'Theme', subjects: 'Subjects', types: 'Types of work', tags: 'Boosters', goals: 'Goals', backup: 'Backup & export', pin: 'PIN lock', demo: 'Demo data' };
 const irow = (label, { value = '', a = '', attrs = '', left = '', cls = '', chev = true } = {}) => `<button class="irow ${cls}" ${a ? `data-a="${a}"` : ''} ${attrs}>${left}<span class="grow">${label}</span>${value !== '' ? `<span class="ival">${value}</span>` : ''}${chev ? '<span class="chev">›</span>' : ''}</button>`;
 const igroup = (head, rows, foot = '') => `${head ? `<span class="ihead">${head}</span>` : ''}<div class="ilist">${rows}</div>${foot ? `<div class="ifoot">${foot}</div>` : ''}`;
 const tile = (icon, cls = '') => `<span class="tile ${cls}">${ic(icon, 17)}</span>`;
@@ -776,10 +780,20 @@ function viewSettings() {
     ${igroup('Tracking', irow('Subjects', { ...nav('subjects', 'book'), value: db.subjects.length }) + irow('Types of work', { ...nav('types', 'layers'), value: db.types.length }) + irow('Boosters', { ...nav('tags', 'spark'), value: db.tags.length }) + irow('Goals', { ...nav('goals', 'target'), value: g.daily ? g.daily + 'h a day' : 'Off' }))}
     ${igroup('Privacy', irow('PIN lock', { ...nav('pin', 'lock'), value: st.pin ? 'On' : 'Off' }))}
     ${igroup('Data', irow('Backup & export', nav('backup', 'download')) + irow('Demo data', { ...nav('demo', 'flask'), value: demoN || '' }))}
+    ${igroup('Devices', irow('Sync across devices', { ...nav('sync', 'cloud'), value: !sync ? 'Off' : sync.err ? 'Problem' : 'On' }))}
     ${igroup('', irow('Reset all data', { a: 'reset', cls: 'danger', chev: false, left: tile('trash', 'bad') }))}
     <div class="ifoot" style="text-align:center">Everything is stored only on this device.</div>`;
   }
   const head = `<button class="back" data-a="setPage" data-v="">‹ Settings</button><h1>${SET_PAGES[p]}</h1>`;
+  if (p === 'sync') {
+    if (sync) return head + igroup('', `<div class="irow">${tile('cloud')}<span class="grow">Status</span><span class="ival">${syncing ? 'Syncing…' : sync.err ? 'Problem' : 'Up to date'}</span></div><div class="irow">${tile('clock')}<span class="grow">Last synced</span><span class="ival">${sync.last ? fmtShort(sync.last) + ', ' + fmtTime(sync.last) : 'Never'}</span></div><div class="irow">${tile('lock')}<span class="grow">Repo</span><span class="ival">${esc(sync.repo)}</span></div>`, sync.err ? `<span style="color:var(--bad)">${esc(sync.err)}</span>` : 'Syncs when you open the app and a few seconds after every change. Works offline and catches up later.')
+      + igroup('', irow('Sync now', { a: 'syncManual', chev: false, left: tile('trend') }) + irow('Turn off sync on this device', { a: 'syncOff', cls: 'danger', chev: false, left: tile('trash', 'bad') }), 'Turning it off keeps everything already on this device and in the repo.');
+    const f = ui.syncForm ||= { repo: 'bblDiv/focus-log-data', token: '' };
+    return head + `<div class="ifoot" style="margin:0 2px 4px">Keeps your phone and laptop in step by saving your sessions to a private repo on your own GitHub account. Only someone with your token can read it.</div>`
+      + igroup('Private repo', `<label class="irow">${tile('lock')}<input type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="owner/repo" data-m="syncForm.repo" value="${esc(f.repo)}" style="flex:1;background:var(--card2);border-color:transparent"></label>`)
+      + igroup('Access token', `<label class="irow">${tile('spark')}<input type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste token (github_pat_…)" data-m="syncForm.token" value="${esc(f.token)}" style="flex:1;background:var(--card2);border-color:transparent"></label>`, 'Create it on GitHub: Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Repository access: only this repo. Permissions: Contents → Read and write. The token is stored only on this device.')
+      + `<button class="btn primary block" style="margin-top:20px" data-a="syncConnect">${ic('cloud', 18)}Connect and sync</button>`;
+  }
   if (p === 'theme') return head + igroup('', Object.entries(THEMES).map(([k, t]) => irow(t.name, { a: 'setTheme', attrs: `data-v="${k}"`, chev: false, value: (st.theme || 'coffee') === k ? '<span class="tick">✓</span>' : '', left: `<i class="sw" style="background:linear-gradient(135deg, ${t.bg} 50%, ${t.acc} 50%)"></i>` })).join(''));
   if (p === 'subjects' || p === 'types' || p === 'tags') {
     const foot = { subjects: 'Tap one to rename it, change its colour, set its own daily or weekly goal, or delete it.', types: 'The kind of work a session is: studying, an assignment, a personal project, club work.', tags: 'Things you used during a session. Stats compare your sessions with and without each one.' }[p];
@@ -899,13 +913,105 @@ function seedDemo() {
     const fr = 2.6 + (sleep - 7) * .35 + (has[0] ? .6 : 0) + (has[1] ? .3 : 0) + (hour < 12 ? .4 : hour >= 21 ? -.5 : 0) - (len > 80 ? .4 : 0) - (night.late ? .4 : 0) + (R() - .5) * 1.6;
     const focus = clamp(Math.round(fr), 1, 5);
     db.sessions.push({
-      id: uid() + i, demo: true, subjectId: db.subjects[Math.floor(R() * db.subjects.length)].id, typeId: db.types.length ? db.types[Math.floor(R() * R() * db.types.length)].id : '', task: '',
+      id: uid() + i, u: Date.now(), demo: true, subjectId: db.subjects[Math.floor(R() * db.subjects.length)].id, typeId: db.types.length ? db.types[Math.floor(R() * R() * db.types.length)].id : '', task: '',
       start, end: start + len * 60000 + paused, pausedMs: paused, pauses: paused ? [{ start: start + 6e5, end: start + 6e5 + paused, reason: [...BREAKS, 'Other'][Math.floor(R() * 4)] }] : [], tags, distractions: Math.max(0, Math.round(4 - focus * .6 - (has[2] ? .8 : 0) + R() * 3)),
       focus, output: clamp(Math.round(fr + (R() - .5) * 2), 1, 5), note: '', sleep, bed: night.bed, wake: night.wake, energy: clamp(Math.round(sleep - 4 + (R() - .5) * 2), 1, 5), mood: clamp(Math.round(3 + (R() - .5) * 3), 1, 5), planned: null
     });
   }
   save(); render(); toast('Added 60 demo sessions');
 }
+
+/* ================= SYNC (private GitHub repo) ================= */
+// The token lives under its own key so it never ends up in a backup file or in the synced data.
+const SYNC_KEY = 'focusLog.sync', SYNC_FILE = '/contents/data.json';
+let sync = null; try { sync = JSON.parse(localStorage.getItem(SYNC_KEY)); } catch (e) { /* not set up */ }
+let syncing = false, syncT, syncAgain = false;
+function saveSync() { sync ? localStorage.setItem(SYNC_KEY, JSON.stringify(sync)) : localStorage.removeItem(SYNC_KEY); }
+// what gets shared: everything except this device's own bits (PIN, running timer, today's check-in)
+const syncDoc = () => ({ schema: SCHEMA, subjects: db.subjects, types: db.types, tags: db.tags, sessions: db.sessions, goals: db.goals, shared: { theme: db.settings.theme, neglectDays: db.settings.neglectDays }, deleted: db.deleted, metaU: db.metaU || 0 });
+const b64e = str => { const b = new TextEncoder().encode(str); let o = ''; for (let i = 0; i < b.length; i += 0x8000) o += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(o); };
+const b64d = str => new TextDecoder().decode(Uint8Array.from(atob(str.replace(/\s/g, '')), c => c.charCodeAt(0)));
+const gh = (path, opt = {}) => fetch('https://api.github.com/repos/' + sync.repo + path, { cache: 'no-store', ...opt, headers: { Authorization: 'Bearer ' + sync.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opt.headers || {}) } });
+const ghErr = st => st === 401 ? 'GitHub rejected the token. It may have expired.' : st === 403 ? 'The token is not allowed to write to this repo.' : st === 404 ? 'Repo not found, or the token cannot see it.' : 'GitHub error ' + st;
+async function pullRemote() {
+  const r = await gh(SYNC_FILE);
+  if (r.status === 404) { const rr = await gh(''); if (!rr.ok) throw new Error(ghErr(rr.status)); return { doc: null, sha: null, text: '' }; } // repo is fine, file not created yet
+  if (!r.ok) throw new Error(ghErr(r.status));
+  const j = await r.json();
+  const text = j.content ? b64d(j.content) : await (await gh(SYNC_FILE, { headers: { Accept: 'application/vnd.github.raw' } })).text(); // files over 1 MB come back without content
+  let doc = null; try { doc = JSON.parse(text); } catch (e) { /* unreadable → treat as empty and overwrite */ }
+  return { doc, sha: j.sha, text };
+}
+// Fold the remote copy into this device. Newest edit of each item wins; a deletion beats any older edit.
+function mergeRemote(r) {
+  const before = JSON.stringify(syncDoc()), now = Date.now();
+  for (const coll of ['subjects', 'types', 'tags']) {
+    const rem = Array.isArray(r[coll]) ? r[coll] : [], remap = {};
+    // two devices each start with their own "Math": same name, different id → keep the remote one, repoint local sessions
+    for (const ri of rem) { const li = db[coll].find(x => x.id !== ri.id && !rem.some(y => y.id === x.id) && x.name.trim().toLowerCase() === String(ri.name).trim().toLowerCase()); if (li) remap[li.id] = ri.id; }
+    if (Object.keys(remap).length) {
+      db[coll] = db[coll].filter(x => !remap[x.id]);
+      for (const s of [...db.sessions, db.active]) {
+        if (!s) continue; let hit = false;
+        if (coll === 'subjects' && remap[s.subjectId]) { s.subjectId = remap[s.subjectId]; hit = true; }
+        if (coll === 'types' && remap[s.typeId]) { s.typeId = remap[s.typeId]; hit = true; }
+        if (coll === 'tags') s.tags.forEach(t => { if (remap[t.id]) { t.id = remap[t.id]; hit = true; } });
+        if (hit && s !== db.active) s.u = now;
+      }
+      if (coll === 'subjects') for (const [a, b] of Object.entries(remap)) { if (db.goals.subjects[a] && !db.goals.subjects[b]) db.goals.subjects[b] = db.goals.subjects[a]; delete db.goals.subjects[a]; }
+    }
+    const m = new Map(db[coll].map(x => [x.id, x]));
+    for (const ri of rem) { const l = m.get(ri.id); if (!l || (ri.u || 0) > (l.u || 0)) m.set(ri.id, ri); }
+    db[coll] = [...m.values()];
+  }
+  const m = new Map(db.sessions.map(x => [x.id, x]));
+  for (const rs of Array.isArray(r.sessions) ? r.sessions : []) { rs.tags ||= []; const l = m.get(rs.id); if (!l || (rs.u || 0) > (l.u || 0)) m.set(rs.id, rs); }
+  db.sessions = [...m.values()];
+  for (const [id, ts] of Object.entries(r.deleted || {})) db.deleted[id] = Math.max(db.deleted[id] || 0, ts);
+  const gone = x => (db.deleted[x.id] || 0) >= (x.u || 1);
+  db.sessions = db.sessions.filter(x => !gone(x));
+  for (const coll of ['subjects', 'types', 'tags']) db[coll] = db[coll].filter(x => !gone(x));
+  for (const s of [...db.sessions, db.active]) if (s) s.tags = s.tags.filter(t => tagById(t.id));
+  if ((r.metaU || 0) > (db.metaU || 0)) { // goals and theme travel together, newest wins
+    if (r.goals) { db.goals = r.goals; db.goals.subjects ||= {}; }
+    if (r.shared) { db.settings.theme = r.shared.theme || db.settings.theme; db.settings.neglectDays = r.shared.neglectDays || db.settings.neglectDays; }
+    db.metaU = r.metaU;
+  }
+  return JSON.stringify(syncDoc()) !== before;
+}
+async function syncNow(loud) {
+  if (!sync) return;
+  if (syncing) { syncAgain = true; return; }
+  if (navigator.onLine === false) { sync.err = 'Offline. Will sync when you are back online.'; saveSync(); syncPaint(); return; }
+  syncing = true; syncPaint();
+  try {
+    let done = false;
+    for (let i = 0; i < 4 && !done; i++) {
+      const rem = await pullRemote();
+      if (rem.doc && mergeRemote(rem.doc)) {
+        saveLocal(); applyTheme();
+        const el = document.activeElement, typing = el && /INPUT|TEXTAREA|SELECT/.test(el.tagName);
+        if (!ui.modal && !ui.setup && !typing) render(); // don't yank the screen from under someone mid-entry
+      }
+      const mine = JSON.stringify(syncDoc());
+      if (rem.text === mine) { done = true; break; }
+      const put = await gh(SYNC_FILE, { method: 'PUT', body: JSON.stringify({ message: 'sync', content: b64e(mine), ...(rem.sha ? { sha: rem.sha } : {}) }) });
+      if (put.ok) done = true;
+      else if (put.status !== 409 && put.status !== 422) throw new Error(ghErr(put.status)); // 409/422 = the other device wrote first → pull again
+    }
+    if (!done) throw new Error('Both devices were saving at once. It will retry.');
+    sync.last = Date.now(); sync.err = '';
+    if (loud) toast('Synced');
+  } catch (e) {
+    sync.err = e instanceof TypeError ? 'Could not reach GitHub. Will retry.' : e.message;
+    if (loud) toast(sync.err);
+  }
+  syncing = false; saveSync(); syncPaint();
+  if (syncAgain) { syncAgain = false; scheduleSync(); }
+}
+function scheduleSync() { if (!sync) return; clearTimeout(syncT); syncT = setTimeout(syncNow, 2500); }
+function syncPaint() { if (ui.tab === 'settings' && (!ui.setPage || ui.setPage === 'sync') && !ui.modal && document.activeElement?.tagName !== 'INPUT') render(); }
+addEventListener('online', () => syncNow());
 
 /* ================= ACTIONS ================= */
 const A = {
@@ -945,7 +1051,7 @@ const A = {
   backToTimer() { const a = db.active, now = Date.now(); a.ending = false; if (a.endPause) { a.pausedMs += now - a.pauseStart; a.pauseStart = null; } save(); render(); },
   saveActive() {
     const a = db.active, e = ui.end; if (!e.focus || !e.output) return toast('Rate focus and output first');
-    db.sessions.push({ id: uid(), subjectId: a.subjectId, typeId: a.typeId, task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focus: e.focus, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned });
+    db.sessions.push({ id: uid(), u: Date.now(), subjectId: a.subjectId, typeId: a.typeId, task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focus: e.focus, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned });
     db.active = null; save(); freshStart(); render(); toast('Session saved');
   },
   discard() { ask('Discard this session? It will not be saved.', () => { db.active = null; save(); freshStart(); render(); }, 'Discard'); },
@@ -961,14 +1067,14 @@ const A = {
     if (!d.focus || !d.output) return toast('Rate focus and output');
     const paused = Math.max(0, parseFloat(d.paused) || 0) * 60000, old = db.sessions.find(s => s.id === d.id);
     const s = Object.assign(old || { id: uid() }, {
-      subjectId: d.subjectId, typeId: d.typeId, task: d.task.trim(), start, end: start + dur * 60000 + paused, pausedMs: paused,
+      u: Date.now(), subjectId: d.subjectId, typeId: d.typeId, task: d.task.trim(), start, end: start + dur * 60000 + paused, pausedMs: paused,
       tags: db.tags.filter(t => d.tags[t.id] != null).map(t => ({ id: t.id, at: d.tags[t.id] === 'mid' ? Math.max(MID_MS, Math.round(dur * 30000)) : d.tags[t.id] })),
       distractions: Math.max(0, parseInt(d.distractions) || 0), focus: d.focus, output: d.output, note: d.note.trim(), sleep: numOrNull(d.sleep), energy: d.energy || null, mood: d.mood || null
     });
     if (!old) db.sessions.push(s);
     save(); ui.modal = null; render(); toast('Saved');
   },
-  deleteSession() { ask('Delete this session?', () => { db.sessions = db.sessions.filter(s => s.id !== ui.modal.data.id); save(); ui.modal = null; render(); }, 'Delete'); },
+  deleteSession() { ask('Delete this session?', () => { db.deleted[ui.modal.data.id] = Date.now(); db.sessions = db.sessions.filter(s => s.id !== ui.modal.data.id); save(); ui.modal = null; render(); }, 'Delete'); },
 
   editItem(el) {
     const coll = el.dataset.coll, x = db[coll].find(i => i.id === el.dataset.v), g = x && db.goals.subjects[x.id] || {};
@@ -979,14 +1085,15 @@ const A = {
     const { coll, data: d } = ui.modal, name = d.name.trim(); if (!name) return toast('Give it a name');
     let x = db[coll].find(i => i.id === d.id);
     if (x) { x.name = name; x.color = d.color; } else { x = { id: uid(), name, color: d.color }; db[coll].push(x); }
-    if (coll === 'subjects') db.goals.subjects[x.id] = { daily: +d.daily || 0, weekly: +d.weekly || 0 };
+    x.u = Date.now();
+    if (coll === 'subjects') { db.goals.subjects[x.id] = { daily: +d.daily || 0, weekly: +d.weekly || 0 }; db.metaU = Date.now(); }
     save(); ui.modal = null; freshStart(); render();
   },
   deleteItem() {
     const { coll, data: d } = ui.modal, n = db.sessions.filter(s => coll === 'subjects' ? s.subjectId === d.id : coll === 'types' ? s.typeId === d.id : s.tags.some(t => t.id === d.id)).length;
     ask(`Delete “${d.name}”?` + (n ? ` ${n} session${n === 1 ? '' : 's'} use it — they are kept, just without this label.` : ''), () => {
-    db[coll] = db[coll].filter(i => i.id !== d.id);
-    if (coll === 'tags') { db.sessions.forEach(s => s.tags = s.tags.filter(t => t.id !== d.id)); if (db.active) db.active.tags = db.active.tags.filter(t => t.id !== d.id); }
+    db[coll] = db[coll].filter(i => i.id !== d.id); db.deleted[d.id] = Date.now();
+    if (coll === 'tags') { db.sessions.forEach(s => { if (s.tags.some(t => t.id === d.id)) { s.tags = s.tags.filter(t => t.id !== d.id); s.u = Date.now(); } }); if (db.active) db.active.tags = db.active.tags.filter(t => t.id !== d.id); }
     if (coll === 'subjects') delete db.goals.subjects[d.id];
     for (const f of [ui.f, ui.hist]) { if (f.subject === d.id) f.subject = ''; if (f.type === d.id) f.type = ''; if (f.tag === d.id) f.tag = ''; }
     save(); ui.modal = null; freshStart(); render();
@@ -994,7 +1101,18 @@ const A = {
   },
   closeModal(el, e) { if (e.target !== el && !('force' in el.dataset)) return; ui.modal = null; renderModal(); },
 
-  setTheme(el) { db.settings.theme = el.dataset.v; save(); applyTheme(); render(); },
+  setTheme(el) { db.settings.theme = el.dataset.v; db.metaU = Date.now(); save(); applyTheme(); render(); },
+  async syncConnect() {
+    const f = ui.syncForm, repo = f.repo.trim().replace(/^https:\/\/github\.com\//, '').replace(/\/$/, ''), token = f.token.trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return toast('Repo should look like owner/name');
+    if (!token) return toast('Paste your access token');
+    sync = { repo, token, last: 0, err: '' };
+    try { const r = await gh(''); if (!r.ok) throw new Error(ghErr(r.status)); }
+    catch (e) { const msg = e instanceof TypeError ? 'Could not reach GitHub.' : e.message; sync = null; return toast(msg); }
+    saveSync(); ui.syncForm = null; render(); syncNow(true);
+  },
+  syncManual() { syncNow(true); },
+  syncOff() { ask('Turn off sync on this device? Your data stays here and in the repo.', () => { sync = null; saveSync(); render(); }, 'Turn off'); },
   setPin() { ui.modal = { kind: 'pin', data: { pin: '' } }; renderModal(); },
   savePin() { const p = ui.modal.data.pin; if (!/^\d{4}$/.test(p)) return toast('PIN must be 4 digits'); db.settings.pin = hashPin(p); save(); ui.modal = null; render(); toast('PIN set'); },
   removePin() { ask('Remove the PIN lock?', () => { db.settings.pin = null; save(); render(); }, 'Remove'); },
@@ -1009,8 +1127,8 @@ const A = {
   exportJSON() { download('focus-log-backup-' + dayKey(Date.now()) + '.json', JSON.stringify(db, null, 2), 'application/json'); },
   exportCSV() { download('focus-log-' + dayKey(Date.now()) + '.csv', toCSV(), 'text/csv'); },
   seedDemo,
-  clearDemo() { db.sessions = db.sessions.filter(s => !s.demo); save(); render(); toast('Demo data cleared'); },
-  reset() { ask('Erase ALL sessions, subjects, boosters and settings on this device?', () => ask('This cannot be undone. Erase everything?', () => { db = defaults(); save(); applyTheme(); freshStart(); render(); toast('All data reset'); }, 'Erase everything'), 'Erase'); }
+  clearDemo() { db.sessions.forEach(s => { if (s.demo) db.deleted[s.id] = Date.now(); }); db.sessions = db.sessions.filter(s => !s.demo); save(); render(); toast('Demo data cleared'); },
+  reset() { ask('Erase ALL sessions, subjects, boosters and settings on this device?' + (sync ? ' Sync will be switched off here; the copy in your GitHub repo is not touched.' : ''), () => ask('This cannot be undone. Erase everything?', () => { sync = null; saveSync(); db = defaults(); saveLocal(); applyTheme(); freshStart(); render(); toast('All data reset'); }, 'Erase everything'), 'Erase'); }
 };
 
 document.addEventListener('click', e => {
@@ -1028,7 +1146,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.id === 'importFile') return importFile(el);
-  if (el.dataset.d) { setPath(db, el.dataset.d, Math.max(0, parseFloat(el.value) || 0)); save(); }
+  if (el.dataset.d) { setPath(db, el.dataset.d, Math.max(0, parseFloat(el.value) || 0)); db.metaU = Date.now(); save(); }
   if (el.dataset.m && 'r' in el.dataset) { setPath(ui, el.dataset.m, el.value); render(); }
 });
 addEventListener('scroll', hideTip, { passive: true });
@@ -1036,6 +1154,7 @@ addEventListener('scroll', hideTip, { passive: true });
 /* ================= BOOT ================= */
 if (db.settings.pin) { $('#lock').hidden = false; renderLock(); }
 render();
+syncNow();
 // ask the browser not to evict this site's storage when space runs low
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
