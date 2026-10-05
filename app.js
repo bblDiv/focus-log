@@ -238,6 +238,13 @@ function render() {
   tick();
 }
 
+let animT;
+function animate(dir = '') {
+  const v = $('#view'); v.classList.remove('enter', 'fwd', 'back'); void v.offsetWidth; // restart the CSS animations
+  v.classList.add('enter'); if (dir) v.classList.add(dir);
+  clearTimeout(animT); animT = setTimeout(() => v.classList.remove('enter', 'fwd', 'back'), 1400);
+}
+
 /* ================= TIMER ================= */
 function elapsedMs(a, now = Date.now()) { return (a.pauseStart || now) - a.start - a.pausedMs; }
 function pausedMs(a, now = Date.now()) { return a.pausedMs + (a.pauseStart ? now - a.pauseStart : 0); }
@@ -257,7 +264,7 @@ function viewHome() {
   const frac = goal ? clamp(min / 60 / goal, 0, 1) : 0, c = ui.ck, done = db.checkins[ckDay()];
   return `<div class="home">
   <span class="eyebrow" style="text-align:center">${new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
-  <div class="ringwrap"><svg viewBox="0 0 260 260">${TICKS}<circle class="ring-bg" cx="130" cy="130" r="106"/>${goal ? `<circle class="ring-fg ${frac >= 1 ? 'done' : ''}" cx="130" cy="130" r="106" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C * (1 - frac)}"/>` : ''}</svg>
+  <div class="ringwrap"><svg viewBox="0 0 260 260">${TICKS}<circle class="ring-bg" cx="130" cy="130" r="106"/>${goal ? `<circle class="ring-fg ${frac >= 1 ? 'done' : ''}" style="--full:${RING_C}" cx="130" cy="130" r="106" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C * (1 - frac)}"/>` : ''}</svg>
     <div class="ringin"><span class="eyebrow">Today</span><div class="today">${fmtDur(min)}</div><div class="small muted">${goal ? 'of ' + goal + 'h goal' : 'studied'}</div></div></div>
   <div class="trio"><div>${ic('layers')}<b>${today.length}</b><span>session${today.length === 1 ? '' : 's'}</span></div><div>${ic('flame')}<b>${st.cur}</b><span>day streak</span></div><div>${ic('target')}<b>${goal ? Math.round(frac * 100) + '%' : '–'}</b><span>of goal</span></div></div>
   <button class="btn primary block big" data-a="newSession">${ic('play', 20)}New session</button>
@@ -394,7 +401,7 @@ const svg = (H, inner) => `<svg class="chart" viewBox="0 0 ${CW} ${H}" role="img
 function stackedBars(buckets) { // [{label, tip, parts:[{color,v}]}]
   const H = 180, max = niceMax(Math.max(...buckets.map(b => sum(b.parts.map(p => p.v))), 0.01));
   const fr = frame(H, 0, max), bw = fr.pw / buckets.length, w = clamp(bw - 2, 1.5, 18);
-  let s = fr.s, hits = '';
+  let s = fr.s + '<g class="grow">', hits = '';
   buckets.forEach((b, i) => {
     const x = fr.L + bw * i + (bw - w) / 2; let y = fr.y(0);
     const live = b.parts.filter(p => p.v > 0);
@@ -405,7 +412,7 @@ function stackedBars(buckets) { // [{label, tip, parts:[{color,v}]}]
     });
     hits += `<rect class="hit" x="${fr.L + bw * i}" y="${fr.T}" width="${bw}" height="${fr.ph}" data-tip="${esc(b.tip)}"/>`;
   });
-  return svg(H, s + xLabels(buckets.map(b => b.label), i => fr.L + bw * i + bw / 2, H) + hits);
+  return svg(H, s + '</g>' + xLabels(buckets.map(b => b.label), i => fr.L + bw * i + bw / 2, H) + hits);
 }
 function lineChart({ labels, series, min = 0, max, fmt = f1, H = 160 }) { // series: [{name,color,values}], null = gap
   const all = series.flatMap(x => x.values).filter(v => v != null);
@@ -415,7 +422,7 @@ function lineChart({ labels, series, min = 0, max, fmt = f1, H = 160 }) { // ser
   for (const se of series) {
     let d = '', pen = false;
     se.values.forEach((v, i) => { if (v == null) { pen = false; return; } d += (pen ? 'L' : 'M') + xOf(i).toFixed(1) + ' ' + fr.y(v).toFixed(1); pen = true; });
-    s += `<path d="${d}" fill="none" stroke="${se.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    s += `<path d="${d}" fill="none" stroke="${se.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" pathLength="1" class="draw"/>`;
     se.values.forEach((v, i) => {
       if (v == null) return;
       if (n <= 31) s += `<circle cx="${xOf(i)}" cy="${fr.y(v)}" r="3" fill="${se.color}" stroke="var(--card)" stroke-width="1.5"/>`;
@@ -430,7 +437,7 @@ function groupedBars(cats, series, max = 5) { // series: [{name,color,values,ns}
   cats.forEach((c, i) => series.forEach((se, j) => {
     const v = se.values[i]; if (v == null) return;
     const x = fr.L + gw * i + gw / 2 - (bw * series.length + 2 * (series.length - 1)) / 2 + j * (bw + 2), y = fr.y(v);
-    s += `<rect x="${x}" y="${y}" width="${bw}" height="${fr.y(0) - y}" rx="3" fill="${se.color}"/><rect class="hit" x="${x - 1}" y="${fr.T}" width="${bw + 2}" height="${fr.ph}" data-tip="${esc(c + '\n' + se.name + ': ' + v.toFixed(2) + (se.ns ? '\n' + se.ns[i] + ' sessions' : ''))}"/>`;
+    s += `<rect class="bar" style="animation-delay:${i * 50}ms" x="${x}" y="${y}" width="${bw}" height="${fr.y(0) - y}" rx="3" fill="${se.color}"/><rect class="hit" x="${x - 1}" y="${fr.T}" width="${bw + 2}" height="${fr.ph}" data-tip="${esc(c + '\n' + se.name + ': ' + v.toFixed(2) + (se.ns ? '\n' + se.ns[i] + ' sessions' : ''))}"/>`;
   }));
   return svg(H, s + cats.map((c, i) => `<text class="ax" x="${fr.L + gw * i + gw / 2}" y="${H - 4}" text-anchor="middle">${esc(c)}</text>`).join(''));
 }
@@ -473,7 +480,7 @@ function vBars(items, { max, fmt = f1, color = ACC, H = 170 } = {}) { // [{label
     s += `<text class="ax" x="${cx}" y="${H - 4}" text-anchor="middle">${esc(it.label)}</text>`;
     if (it.value == null) return;
     const y = Math.min(fr.y(it.value), y0 - 1), r = Math.min(4, bw / 2, y0 - y);
-    s += `<path d="M${x} ${y0}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + bw - r}Q${x + bw} ${y} ${x + bw} ${y + r}V${y0}Z" fill="${it.color || color}" opacity="${it.faded ? 0.45 : 1}"/>`;
+    s += `<path class="bar" style="animation-delay:${i * 40}ms" d="M${x} ${y0}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + bw - r}Q${x + bw} ${y} ${x + bw} ${y + r}V${y0}Z" fill="${it.color || color}" opacity="${it.faded ? 0.45 : 1}"/>`;
     if (items.length <= 8) s += `<text class="vl" x="${cx}" y="${y - 4}" text-anchor="middle">${fmt(it.value)}</text>`;
     s += `<rect class="hit" x="${fr.L + gw * i}" y="${fr.T}" width="${gw}" height="${fr.ph}" data-tip="${esc(it.tip || it.label + ': ' + fmt(it.value))}"/>`;
   });
@@ -712,7 +719,7 @@ function statsGoals(base) {
   const now = Date.now(), all = db.sessions, today = startOfDay(now), wk = weekStart(now), g = db.goals;
   const bar = (label, min, goalH, color) => { const p = goalH ? clamp(min / 60 / goalH * 100, 0, 100) : 0; return `<div class="row between small"><span>${label}</span><span class="muted">${(min / 60).toFixed(1)} / ${goalH}h${p >= 100 ? ' ✓' : ''}</span></div><div class="prog"><div style="width:${p}%;background:${p >= 100 ? 'var(--good)' : color || 'var(--accent)'}"></div></div>`; };
   let goals = '';
-  const ring = (label, min, goalH) => { const f = clamp(min / 60 / goalH, 0, 1), C = 2 * Math.PI * 42; return `<div class="gring"><svg viewBox="0 0 100 100"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fg ${f >= 1 ? 'done' : ''}" cx="50" cy="50" r="42" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - f)}" transform="rotate(-90 50 50)"/></svg><div class="in"><b>${(min / 60).toFixed(1)}h</b><span>of ${goalH}h</span></div><em>${label}</em></div>`; };
+  const ring = (label, min, goalH) => { const f = clamp(min / 60 / goalH, 0, 1), C = 2 * Math.PI * 42; return `<div class="gring"><svg viewBox="0 0 100 100"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fg ${f >= 1 ? 'done' : ''}" style="--full:${C}" cx="50" cy="50" r="42" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - f)}" transform="rotate(-90 50 50)"/></svg><div class="in"><b>${(min / 60).toFixed(1)}h</b><span>of ${goalH}h</span></div><em>${label}</em></div>`; };
   const rings = (g.daily ? ring('Today', minsBetween(all, today, now + 1), g.daily) : '') + (g.weekly ? ring('This week', minsBetween(all, wk, now + 1), g.weekly) : '');
   if (rings) goals += `<div class="grings">${rings}</div>`;
   db.subjects.forEach(sb => {
@@ -826,7 +833,7 @@ function viewSettings() {
   if (p === 'backup') return head + igroup('Export', irow('Export backup (JSON)', { a: 'exportJSON', left: tile('upload') }) + irow('Export spreadsheet (CSV)', { a: 'exportCSV', left: tile('table') }), 'The JSON backup holds everything and can be imported again. The CSV is one row per session.') + igroup('Import', `<label class="irow">${tile('download')}<span class="grow">Import a JSON backup</span><span class="chev">›</span><input type="file" id="importFile" accept="application/json,.json" hidden></label>`, 'Importing replaces everything on this device.');
   if (p === 'pin') return head + igroup('', st.pin ? irow('Change PIN', { a: 'setPin', left: tile('lock') }) + irow('Turn PIN off', { a: 'removePin', cls: 'danger', chev: false, left: tile('trash', 'bad') }) : irow('Set a PIN', { a: 'setPin', left: tile('lock') }), 'Asks for a 4-digit PIN each time the app opens. It is a privacy screen, not encryption. If you forget it, the only way back in is to clear the site data.');
   const demoN = db.sessions.filter(s => s.demo).length;
-  return head + igroup('', irow('Add 60 demo sessions', { a: 'seedDemo', chev: false, left: tile('flask') }) + (demoN ? irow('Clear demo sessions', { a: 'clearDemo', cls: 'danger', chev: false, value: demoN, left: tile('trash', 'bad') }) : ''), 'Fake sessions to preview the stats. Clearing removes only the demo ones.');
+  return head + igroup('', irow('Add 60 demo sessions', { a: 'seedDemo', chev: false, left: tile('flask') }) + (demoN ? irow('Clear demo sessions', { a: 'clearDemo', cls: 'danger', chev: false, value: demoN, left: tile('trash', 'bad') }) : ''), 'Fake sessions to preview the stats. Clearing removes only the demo ones.' + (sync ? ' Sync is on, so demo sessions also show up on your other devices until you clear them.' : ''));
 }
 
 /* ================= MODALS ================= */
@@ -1039,13 +1046,14 @@ addEventListener('online', () => syncNow());
 
 /* ================= ACTIONS ================= */
 const A = {
-  tab(el) { ui.tab = el.dataset.v; ui.setPage = null; scrollTo(0, 0); render(); },
-  setPage(el) { ui.setPage = el.dataset.v || null; scrollTo(0, 0); render(); },
+  tab(el) { ui.tab = el.dataset.v; ui.setPage = null; scrollTo(0, 0); render(); animate(); },
+  setPage(el) { ui.setPage = el.dataset.v || null; scrollTo(0, 0); render(); animate(el.dataset.v ? 'fwd' : 'back'); },
   // generic setter: data-path on ui, data-v value; without data-keep a second tap clears it
   set(el) {
     const p = el.dataset.path, v = 'n' in el.dataset ? +el.dataset.v : el.dataset.v, cur = getPath(ui, p);
     setPath(ui, p, 'keep' in el.dataset || String(cur) !== String(v) ? v : ('n' in el.dataset ? 0 : ''));
     p.startsWith('modal.') ? renderModal(true) : render();
+    if (p === 'statsTab' || p === 'f.range') animate();
   },
   startTag(el) { const t = ui.start.tags; t[el.dataset.v] ? delete t[el.dataset.v] : t[el.dataset.v] = true; render(); },
   // The check-in is saved the moment you tap it, applies to every session that day, and stays hidden until tomorrow.
@@ -1059,13 +1067,13 @@ const A = {
     ui.ckEdit = false; save(); render(); toast('Check-in saved');
   },
   ckEdit() { const d = db.checkins[ckDay()]; ui.ck = { bed: d.bed || '', wake: d.wake || '', energy: d.energy || 0, mood: d.mood || 0 }; ui.ckEdit = true; render(); },
-  newSession() { ui.setup = true; scrollTo(0, 0); render(); },
-  backHome() { ui.setup = false; render(); },
+  newSession() { ui.setup = true; scrollTo(0, 0); render(); animate('fwd'); },
+  backHome() { ui.setup = false; render(); animate('back'); },
   start() {
     const s = ui.start; if (!s.subjectId) return toast('Pick a subject');
     db.active = { subjectId: s.subjectId, typeId: s.typeId, task: s.task.trim(), start: Date.now(), pausedMs: 0, pauseStart: null, tags: db.tags.filter(t => s.tags[t.id]).map(t => ({ id: t.id, at: 0 })), distractions: 0, planned: +s.planned > 0 ? +s.planned : null, ...ckFields(db.checkins[ckDay()]), ending: false };
     db.settings.lastSubject = s.subjectId; db.settings.lastType = s.typeId; ui.setup = false; ui.end = { focus: 0, output: 0, note: '' };
-    save(); render();
+    save(); render(); animate();
   },
   // pausing stops the clock straight away, then asks why; each break is logged with its reason and length
   pause() {
@@ -1079,17 +1087,18 @@ const A = {
     if (p && !p.end) { p.reason = r; save(); }
     ui.modal = null; render();
   },
-  distract() { db.active.distractions++; save(); $('#tDist').textContent = db.active.distractions; },
+  distract() { db.active.distractions++; save(); const b = $('#tDist'); b.textContent = db.active.distractions; b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); },
   liveTag(el) { const a = db.active, i = a.tags.findIndex(t => t.id === el.dataset.v); i >= 0 ? a.tags.splice(i, 1) : a.tags.push({ id: el.dataset.v, at: Date.now() - a.start, ts: Date.now() }); save(); render(); },
   // finishing freezes the clock by starting a pause; that final pause never counts toward paused time
-  end() { const a = db.active; a.endPause = !a.pauseStart; if (!a.pauseStart) a.pauseStart = Date.now(); a.ending = true; save(); scrollTo(0, 0); render(); },
-  backToTimer() { const a = db.active, now = Date.now(); a.ending = false; if (a.endPause) { a.pausedMs += now - a.pauseStart; a.pauseStart = null; } save(); render(); },
+  end() { const a = db.active; a.endPause = !a.pauseStart; if (!a.pauseStart) a.pauseStart = Date.now(); a.ending = true; save(); scrollTo(0, 0); render(); animate(); },
+  // going back un-freezes the clock; the time spent on the finish screen is skipped entirely rather than logged as a break
+  backToTimer() { const a = db.active, now = Date.now(); a.ending = false; if (a.endPause) { const gap = now - a.pauseStart; a.start += gap; (a.pauses || []).forEach(p => { p.start += gap; if (p.end) p.end += gap; }); a.pauseStart = null; } save(); render(); animate(); },
   saveActive() {
     const a = db.active, e = ui.end; if (!e.output) return toast('Rate your output first');
     db.sessions.push(setFocus({ id: uid(), u: Date.now(), subjectId: a.subjectId, typeId: a.typeId, task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focusSelf: e.focus || null, fa: 0, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned }));
-    db.active = null; save(); freshStart(); render(); toast('Session saved');
+    db.active = null; save(); freshStart(); render(); animate(); toast('Session saved');
   },
-  discard() { ask('Discard this session? It will not be saved.', () => { db.active = null; save(); freshStart(); render(); }, 'Discard'); },
+  discard() { ask('Discard this session? It will not be saved.', () => { db.active = null; save(); freshStart(); render(); animate(); }, 'Discard'); },
   askNo(el, e) { if (e.target !== el && !('force' in el.dataset)) return; $('#ask').innerHTML = ''; askCb = null; },
   askYes() { const cb = askCb; $('#ask').innerHTML = ''; askCb = null; if (cb) cb(); },
 
@@ -1108,7 +1117,7 @@ const A = {
     });
     if (old && Math.abs(paused - sum((s.pauses || []).map(p => p.end - p.start))) > 60000) s.pauses = []; // break total was edited by hand, so the logged breaks no longer add up
     setFocus(s);
-    if (!old) db.sessions.push(s);
+    if (!old) { const ck = db.checkins[ckDayOf(start)]; if (ck) for (const [k, v] of Object.entries(ckFields(ck))) if (s[k] == null) s[k] = v; db.sessions.push(s); }
     save(); ui.modal = null; render(); toast('Saved');
   },
   deleteSession() { ask('Delete this session?', () => { db.deleted[ui.modal.data.id] = Date.now(); db.sessions = db.sessions.filter(s => s.id !== ui.modal.data.id); save(); ui.modal = null; render(); }, 'Delete'); },
@@ -1190,7 +1199,7 @@ addEventListener('scroll', hideTip, { passive: true });
 
 /* ================= BOOT ================= */
 if (db.settings.pin) { $('#lock').hidden = false; renderLock(); }
-render();
+render(); animate();
 syncNow();
 // ask the browser not to evict this site's storage when space runs low
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

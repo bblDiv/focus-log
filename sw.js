@@ -1,5 +1,5 @@
-// Offline cache. Bump CACHE when you change any file so phones pick up the update.
-const CACHE = 'focuslog-v11';
+// Offline support. Bump CACHE whenever a file changes.
+const CACHE = 'focuslog-v12';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,18 +14,24 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Stale-while-revalidate: answer from cache instantly, refresh the cache in the background.
+// Network first, so an update shows up the next time the app opens while online.
+// If the network is down or takes longer than 3.5s, fall back to the cached copy.
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
-  e.respondWith(
-    caches.open(CACHE).then(async cache => {
-      const cached = await cache.match(req, { ignoreSearch: true });
-      const fresh = fetch(req).then(res => {
-        if (res && res.ok) cache.put(req, res.clone());
-        return res;
-      }).catch(() => cached);
-      return cached || fresh;
-    })
-  );
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    try {
+      const res = await Promise.race([
+        fetch(req, { cache: 'no-cache' }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3500))
+      ]);
+      if (res && res.ok) cache.put(req, res.clone());
+      return res;
+    } catch (err) {
+      const hit = await cache.match(req, { ignoreSearch: true });
+      if (hit) return hit;
+      throw err;
+    }
+  })());
 });
