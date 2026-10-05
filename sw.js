@@ -1,5 +1,5 @@
 // Offline cache. Bump CACHE when you change any file so phones pick up the update.
-const CACHE = 'focuslog-v10';
+const CACHE = 'focuslog-v11';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

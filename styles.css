@@ -126,6 +126,11 @@ h2 small { margin-left: 25px; }
 .scale button { height: 48px; border-radius: 10px; background: var(--card2); color: var(--muted); display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s; }
 .scale button.on { background: var(--accent); color: var(--on-accent); }
 .scaleword { text-align: center; font-size: 12px; color: var(--accent); margin-top: 6px; min-height: 16px; }
+.ckdone { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; margin-top: 26px; padding: 13px 16px; border-radius: 12px; background: var(--card); color: var(--text2); font-size: 14px; }
+.ckdone .ic { color: var(--accent); }
+.fscore { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
+.fscore > div:first-child { flex: none; }
+.fscore b { font: 600 34px/1 var(--timer); }
 .livehead { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 17px; }
 .group { padding: 2px 0 20px; border-bottom: 1px solid var(--line); }
 .group .lbl { margin-top: 18px; }
