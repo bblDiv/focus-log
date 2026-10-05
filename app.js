@@ -160,7 +160,7 @@ function showTip(text, x, y) {
   t.style.left = clamp(x - r.width / 2, 8, innerWidth - r.width - 8) + 'px';
   t.style.top = (y - r.height - 14 < 8 ? y + 18 : y - r.height - 14) + 'px';
 }
-const hideTip = () => { $('#tip').hidden = true; };
+const hideTip = () => { $('#tip').hidden = true; document.querySelectorAll('.sel').forEach(x => x.classList.remove('sel')); };
 // In-app confirm sheet: native confirm() is silently blocked in some embedded/home-screen contexts.
 let askCb = null;
 function ask(msg, cb, label = 'Confirm') {
@@ -1180,7 +1180,8 @@ const A = {
 
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-tip]');
-  t ? showTip(t.dataset.tip, e.clientX, e.clientY) : hideTip();
+  hideTip();
+  if (t) { showTip(t.dataset.tip, e.clientX, e.clientY); (t.closest('.col, .hbar') || t).classList.add('sel'); }
   const el = e.target.closest('[data-a]');
   if (el && A[el.dataset.a]) A[el.dataset.a](el, e);
 });
