@@ -344,4 +344,34 @@ button.irow:active, label.irow:active { background: var(--card2); }
 .badge.bump { animation: pop .3s ease; }
 .live:not(.paused) #tState::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--good); margin-right: 7px; vertical-align: 1px; animation: pulse 1.8s ease-in-out infinite; }
 .live.paused .elapsed { opacity: 1; animation: pulse 2.4s ease-in-out infinite; }
+/* Hover (mouse/trackpad only, so nothing sticks after a tap on a phone): data marks zoom, rows and cards nudge. */
+@keyframes nudge { 0%, 100% { translate: 0; } 25% { translate: -3px 0; } 60% { translate: 2px 0; } 85% { translate: -1px 0; } }
+svg.chart .bar, svg.chart .seg, svg.chart .col, svg.chart rect[data-tip], svg.chart circle.hit, .pie path, .pie circle { transform-box: fill-box; transition: transform .16s ease, filter .16s ease, fill .16s, stroke .16s; }
+.hbar .fill, .hbar .name, .tbl td.c, .irow .chev, .irow .tile, .kpi b, .sess, .list-row .tile { transition: transform .16s ease, filter .16s ease, color .16s, background .16s; }
+@media (hover: hover) {
+  svg.chart .col:hover .bar { transform: scale(1.12, 1.03); transform-origin: 50% 100%; filter: brightness(1.18); }
+  svg.chart .col:hover .seg { transform: scaleX(1.35); transform-origin: 50% 50%; filter: brightness(1.2); }
+  svg.chart .col:hover .vl { fill: var(--text); }
+  svg.chart rect[data-tip]:not(.hit):hover { transform: scale(1.4); transform-origin: 50% 50%; stroke: var(--text); stroke-width: 1; }
+  svg.chart circle.hit:hover { fill: color-mix(in srgb, var(--accent) 28%, transparent); stroke: var(--accent); stroke-width: 1.5; transform: scale(1.15); transform-origin: 50% 50%; }
+  .pie path:hover, .pie circle:hover { transform: scale(1.06); transform-origin: 90px 90px; transform-box: view-box; filter: brightness(1.15); }
+  .hbar:hover .fill { transform: scaleY(1.3); filter: brightness(1.18); }
+  .hbar:hover .name { color: var(--text); }
+  .tbl td.c:hover { transform: scale(1.14); filter: brightness(1.12); }
+  .kpi:hover b { transform: scale(1.06); transform-origin: 0 50%; color: var(--accent); }
+  .kpi b { display: block; }
+  .sess:hover { transform: translateY(-2px) scale(1.012); background: var(--card2); box-shadow: 0 8px 22px rgba(0, 0, 0, .28); animation: nudge .38s ease; }
+  .irow:hover:is(button, label) { background: var(--card2); }
+  button.irow:hover { animation: nudge .38s ease; }
+  .irow:hover .chev { transform: translateX(4px); color: var(--accent); }
+  .irow:hover .tile, .list-row:hover .tile { transform: scale(1.1) rotate(-4deg); }
+  .btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+  .chip:hover { border-color: var(--c, var(--accent)); color: var(--text); transform: translateY(-1px); }
+  .rate button:hover, .scale button:hover, .seg button:not(.on):hover { background: var(--card2); color: var(--text); transform: translateY(-1px); }
+  .subtabs button:hover { color: var(--text); }
+  #tabs button:hover { color: var(--text2); }
+  #tabs button:hover svg { transform: translateY(-2px) scale(1.12); }
+  .ckdone:hover { background: var(--card2); animation: nudge .38s ease; }
+  .back:hover { text-decoration: underline; }
+}
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

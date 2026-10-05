@@ -405,12 +405,13 @@ function stackedBars(buckets) { // [{label, tip, parts:[{color,v}]}]
   buckets.forEach((b, i) => {
     const x = fr.L + bw * i + (bw - w) / 2; let y = fr.y(0);
     const live = b.parts.filter(p => p.v > 0);
+    s += '<g class="col">';
     live.forEach((p, j) => {
       const h = p.v / max * fr.ph; y -= h;
       const gap = j < live.length - 1 && h > 3 ? 1.5 : 0, top = j === live.length - 1;
-      s += `<rect x="${x}" y="${y + gap}" width="${w}" height="${Math.max(0.5, h - gap)}" fill="${p.color}" ${top ? `rx="${Math.min(3, w / 2, h / 2)}"` : ''}/>`;
+      s += `<rect class="seg" x="${x}" y="${y + gap}" width="${w}" height="${Math.max(0.5, h - gap)}" fill="${p.color}" ${top ? `rx="${Math.min(3, w / 2, h / 2)}"` : ''}/>`;
     });
-    hits += `<rect class="hit" x="${fr.L + bw * i}" y="${fr.T}" width="${bw}" height="${fr.ph}" data-tip="${esc(b.tip)}"/>`;
+    s += `<rect class="hit" x="${fr.L + bw * i}" y="${fr.T}" width="${bw}" height="${fr.ph}" data-tip="${esc(b.tip)}"/></g>`;
   });
   return svg(H, s + '</g>' + xLabels(buckets.map(b => b.label), i => fr.L + bw * i + bw / 2, H) + hits);
 }
@@ -437,7 +438,7 @@ function groupedBars(cats, series, max = 5) { // series: [{name,color,values,ns}
   cats.forEach((c, i) => series.forEach((se, j) => {
     const v = se.values[i]; if (v == null) return;
     const x = fr.L + gw * i + gw / 2 - (bw * series.length + 2 * (series.length - 1)) / 2 + j * (bw + 2), y = fr.y(v);
-    s += `<rect class="bar" style="animation-delay:${i * 50}ms" x="${x}" y="${y}" width="${bw}" height="${fr.y(0) - y}" rx="3" fill="${se.color}"/><rect class="hit" x="${x - 1}" y="${fr.T}" width="${bw + 2}" height="${fr.ph}" data-tip="${esc(c + '\n' + se.name + ': ' + v.toFixed(2) + (se.ns ? '\n' + se.ns[i] + ' sessions' : ''))}"/>`;
+    s += `<g class="col"><rect class="bar" style="animation-delay:${i * 50}ms" x="${x}" y="${y}" width="${bw}" height="${fr.y(0) - y}" rx="3" fill="${se.color}"/><rect class="hit" x="${x - 1}" y="${fr.T}" width="${bw + 2}" height="${fr.ph}" data-tip="${esc(c + '\n' + se.name + ': ' + v.toFixed(2) + (se.ns ? '\n' + se.ns[i] + ' sessions' : ''))}"/></g>`;
   }));
   return svg(H, s + cats.map((c, i) => `<text class="ax" x="${fr.L + gw * i + gw / 2}" y="${H - 4}" text-anchor="middle">${esc(c)}</text>`).join(''));
 }
@@ -480,9 +481,9 @@ function vBars(items, { max, fmt = f1, color = ACC, H = 170 } = {}) { // [{label
     s += `<text class="ax" x="${cx}" y="${H - 4}" text-anchor="middle">${esc(it.label)}</text>`;
     if (it.value == null) return;
     const y = Math.min(fr.y(it.value), y0 - 1), r = Math.min(4, bw / 2, y0 - y);
-    s += `<path class="bar" style="animation-delay:${i * 40}ms" d="M${x} ${y0}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + bw - r}Q${x + bw} ${y} ${x + bw} ${y + r}V${y0}Z" fill="${it.color || color}" opacity="${it.faded ? 0.45 : 1}"/>`;
+    s += `<g class="col"><path class="bar" style="animation-delay:${i * 40}ms" d="M${x} ${y0}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + bw - r}Q${x + bw} ${y} ${x + bw} ${y + r}V${y0}Z" fill="${it.color || color}" opacity="${it.faded ? 0.45 : 1}"/>`;
     if (items.length <= 8) s += `<text class="vl" x="${cx}" y="${y - 4}" text-anchor="middle">${fmt(it.value)}</text>`;
-    s += `<rect class="hit" x="${fr.L + gw * i}" y="${fr.T}" width="${gw}" height="${fr.ph}" data-tip="${esc(it.tip || it.label + ': ' + fmt(it.value))}"/>`;
+    s += `<rect class="hit" x="${fr.L + gw * i}" y="${fr.T}" width="${gw}" height="${fr.ph}" data-tip="${esc(it.tip || it.label + ': ' + fmt(it.value))}"/></g>`;
   });
   return svg(H, s);
 }
@@ -1196,6 +1197,10 @@ document.addEventListener('change', e => {
   if (el.dataset.m && 'r' in el.dataset) { setPath(ui, el.dataset.m, el.value); render(); }
 });
 addEventListener('scroll', hideTip, { passive: true });
+if (matchMedia('(hover: hover)').matches) document.addEventListener('mousemove', e => {
+  const t = e.target.closest && e.target.closest('[data-tip]');
+  t ? showTip(t.dataset.tip, e.clientX, e.clientY) : hideTip();
+});
 
 /* ================= BOOT ================= */
 if (db.settings.pin) { $('#lock').hidden = false; renderLock(); }
