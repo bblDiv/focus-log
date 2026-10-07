@@ -150,6 +150,7 @@ db = load();
 applyTheme();
 
 const ui = {
+  tipI: Math.floor(Date.now() / 864e5), // a different tip each day; tap to cycle
   tab: 'timer', statsTab: 'overview', cmp: 'focus', pm: 'eff',
   f: { range: '30d', from: '', to: '', subject: '', type: '', tag: '' },
   hist: { subject: '', type: '', tag: '', q: '' },
@@ -261,6 +262,46 @@ function animate(dir = '') {
   clearTimeout(animT); animT = setTimeout(() => v.classList.remove('enter', 'fwd', 'back'), 1400);
 }
 
+// One-line tips from your own last 30 days. Only claims with at least 3 sessions behind each side make the list.
+function insights() {
+  const now = Date.now(), L = db.sessions.filter(s => s.start >= now - 30 * 864e5), out = [];
+  const eff = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(score)) / m * 100 : 0; };
+  if (L.length >= 3) {
+    const bl = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ i, g: L.filter(s => Math.floor(new Date(s.start).getHours() / 3) === i) })).filter(x => x.g.length >= 3).sort((x, y) => eff(y.g) - eff(x.g));
+    if (bl.length >= 2) out.push(`Your sharpest window is <b>${fmtHour(bl[0].i * 3)}–${fmtHour((bl[0].i * 3 + 3) % 24)}</b>: ${Math.round(eff(bl[0].g))}% effective, against ${Math.round(eff(bl[bl.length - 1].g))}% at ${fmtHour(bl[bl.length - 1].i * 3)}.`);
+    const cr = db.crews.map(c => ({ c, g: L.filter(s => s.crewId === c.id) })).filter(x => x.g.length >= 3).sort((x, y) => eff(y.g) - eff(x.g));
+    if (cr.length >= 2) out.push(`You get the most done <b>${/^alone$/i.test(cr[0].c.name) ? 'on your own' : 'with ' + esc(cr[0].c.name)}</b> (${Math.round(eff(cr[0].g))}% effective), the least ${/^alone$/i.test(cr[cr.length - 1].c.name) ? 'on your own' : 'with ' + esc(cr[cr.length - 1].c.name)} (${Math.round(eff(cr[cr.length - 1].g))}%).`);
+    const hi = L.filter(s => s.sleep >= 7), lo = L.filter(s => s.sleep != null && s.sleep < 6);
+    if (hi.length >= 3 && lo.length >= 3) out.push(`After 7h or more of sleep your focus averages <b>${f1(avg(hi, s => s.focus))}</b>, against ${f1(avg(lo, s => s.focus))} on under 6h.`);
+    const w1 = L.filter(s => s.start >= now - 7 * 864e5), w0 = L.filter(s => s.start < now - 7 * 864e5 && s.start >= now - 14 * 864e5), dph = g => sum(g.map(distOf)) / (sum(g.map(effMin)) / 60 || 1);
+    if (w1.length >= 3 && w0.length >= 3) out.push(`Distractions this week: <b>${dph(w1).toFixed(1)} an hour</b>, ${dph(w1) <= dph(w0) ? 'down' : 'up'} from ${dph(w0).toFixed(1)} last week.`);
+  }
+  const st = streaks(db.sessions), goal = db.goals.daily, today = minsBetween(db.sessions, startOfDay(now), now + 1);
+  if (st.cur >= 2) out.push(`You are on a <b>${st.cur}-day streak</b>. Your best so far is ${st.best}.`);
+  if (goal && today < goal * 60 && today > 0) out.push(`<b>${fmtDur(goal * 60 - today)}</b> more today reaches your ${goal}h goal.`);
+  return out.length ? out : ['Log a few sessions and tips drawn from your own numbers will show up here.'];
+}
+function milestones() {
+  const S = db.sessions, hrs = sum(S.map(effMin)) / 60, best = streaks(S).best, hr = s => new Date(s.start).getHours();
+  const M = (icon, name, desc, cur, goal) => ({ icon, name, desc, cur: Math.min(cur, goal), goal, done: cur >= goal });
+  return [
+    M('play', 'First step', 'Finish your first session', S.length, 1),
+    M('clock', '10 hours', 'Log 10 hours in total', hrs, 10), M('clock', '50 hours', 'Log 50 hours in total', hrs, 50), M('trophy', '100 hours', 'Log 100 hours in total', hrs, 100),
+    M('flame', '3-day streak', 'Study 3 days in a row', best, 3), M('flame', 'One week', 'Study 7 days in a row', best, 7), M('flame', 'Two weeks', 'Study 14 days in a row', best, 14), M('trophy', '30-day streak', 'Study 30 days in a row', best, 30),
+    M('target', 'Deep diver', '10 sessions with focus 4 or higher', S.filter(s => s.focus >= 4).length, 10),
+    M('check', 'Clean hour', 'An hour-long session with no distractions', S.some(s => effMin(s) >= 60 && distOf(s) === 0) ? 1 : 0, 1),
+    M('sun', 'Early bird', '5 sessions started before 8am', S.filter(s => hr(s) >= 4 && hr(s) < 8).length, 5),
+    M('moon', 'Night owl', '5 sessions started after 10pm', S.filter(s => hr(s) >= 22 || hr(s) < 4).length, 5),
+    M('smile', 'Well rested', 'Log 7h or more of sleep on 7 days', Object.values(db.checkins).filter(c => c.sleep >= 7).length, 7),
+    M('spark', 'Self-aware', 'Log your energy and mood 20 times', db.moods.length, 20)
+  ];
+}
+function spark(vals) { // small area line under the headline numbers
+  if (vals.length < 3 || !vals.some(v => v > 0)) return '';
+  const W = 300, H = 44, max = Math.max(...vals), d = vals.map((v, i) => (i ? 'L' : 'M') + (i / (vals.length - 1) * W).toFixed(1) + ' ' + (H - 3 - v / max * (H - 10)).toFixed(1)).join('');
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="spg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".4"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs><path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#spg)"/><path class="draw" pathLength="1" d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
 /* ================= TIMER ================= */
 function elapsedMs(a, now = Date.now()) { return (a.pauseStart || now) - a.start - a.pausedMs; }
 function pausedMs(a, now = Date.now()) { return a.pausedMs + (a.pauseStart ? now - a.pauseStart : 0); }
@@ -286,6 +327,8 @@ function viewHome() {
   <div class="trio"><div>${ic('layers')}<b>${today.length}</b><span>session${today.length === 1 ? '' : 's'}</span></div><div>${ic('flame')}<b>${st.cur}</b><span>day streak</span></div><div>${ic('target')}<b>${goal ? Math.round(frac * 100) + '%' : '–'}</b><span>of goal</span></div></div>
   <div class="week">${week.map(w => `<div class="${w.today ? 'on' : ''}" data-tip="${w.name}\n${fmtDur(w.m)}"><i style="height:${Math.max(4, w.m / wmax * 42)}px"></i><span>${w.name[0]}</span></div>`).join('')}</div>
   <button class="btn primary block big" data-a="newSession">${ic('play', 20)}New session</button>
+  ${(l => l && subj(l.subjectId).id ? `<button class="quick" data-a="quickStart"><span class="dot" style="background:${subj(l.subjectId).color}"></span><span class="grow">Repeat last<span class="isub">${esc([subj(l.subjectId).name, typ(l.typeId).name, crew(l.crewId).name].filter(Boolean).join(' · '))}</span></span>${ic('play', 16)}</button>` : '')(db.sessions.reduce((m, x) => !m || x.start > m.start ? x : m, null))}
+  ${(tips => `<button class="tip" data-a="nextTip">${ic('spark', 17)}<span class="grow">${tips[ui.tipI % tips.length]}</span>${tips.length > 1 ? `<small>${ui.tipI % tips.length + 1}/${tips.length}</small>` : ''}</button>`)(insights())}
   ${done && !ui.ckEdit ? `<button class="ckdone" data-a="ckEdit">${ic('moon', 16)}<span class="grow">Checked in today${ckSummary(done) ? ' · ' + ckSummary(done).replace(/^(\d)/, 'slept $1').toLowerCase() : ''}${done.energy ? ' · energy ' + ENERGY[done.energy - 1].toLowerCase() : ''}${done.mood ? ' · mood ' + MOOD[done.mood - 1].toLowerCase() : ''}</span>${ic('check', 16)}</button>` : `<div class="card checkin">
     <div class="ck-head"><b>Daily check-in</b><span>once a day</span></div>
     ${ckForm('ck', c)}
@@ -337,6 +380,7 @@ function viewEnd(a) {
     <div class="livehead"><span class="dot" style="background:${sub.color}"></span><b>${esc(sub.name)}</b><span class="muted">· ${fmtTime(a.start)}–${fmtTime(a.pauseStart)}</span></div>
     <div class="sline" style="justify-content:center;margin-top:10px"><span>${ic('bolt', 14)}${a.distractions} distraction${a.distractions === 1 ? '' : 's'}</span>${br >= 1 ? `<span>${ic('cup', 14)}${Math.round(br)}m on break</span>` : ''}</div>
   </div>
+  ${(g => g.length >= 3 ? `<div class="sline" style="justify-content:center;margin:12px 0 -6px"><span>${deltaHTML(pctChange(fa, avg(g, s => s.focus)))} focus vs your 30-day average (${f1(avg(g, s => s.focus))})</span></div>` : '')(db.sessions.filter(s => s.start >= Date.now() - 30 * 864e5))}
   <div class="card fscore"><div><span class="eyebrow">Focus score</span><b>${f1(fa)}</b><span class="muted"> / 5</span></div><div class="small muted">${fp.dist} distraction${fp.dist === 1 ? '' : 's'}${fp.asDist ? ` (${a.distractions} tapped + ${fp.asDist} phone/other break${fp.asDist === 1 ? '' : 's'})` : ''} and ${Math.round(br)}m of breaks${br >= 1 ? `, ${Math.round(fp.weighted)}m of it counted` : ''}, over ${fmtDur(elapsedMs(a) / 60000)}.${e.focus ? ` With your rating: <b style="color:var(--text)">${f1(Math.round((0.6 * fa + 0.4 * e.focus) * 10) / 10)}</b>.` : ''}</div></div>
   <span class="lbl">${ic('target', 14)}Your own focus rating <em>· optional</em></span>${rate('end.focus', e.focus)}
   <span class="lbl">${ic('check', 14)}Output <em>· how much got done</em></span>${rate('end.output', e.output)}
@@ -552,9 +596,9 @@ function statsOverview(list, base, a, b) {
   const foc = n => [avg(base.filter(s => s.start >= now - n * D), s => s.focus), avg(base.filter(s => s.start >= now - 2 * n * D && s.start < now - n * D), s => s.focus)];
   const chg = (l, [cur, prv], f) => `<div class="list-row"><div class="grow">${l}<div class="small muted">${cur == null ? '–' : f(cur)} now · ${prv ? f(prv) : '–'} before</div></div><b>${deltaHTML(pctChange(cur || 0, prv))}</b></div>`;
   const dl = days.map(fmtShort);
-  return `<div class="hero">
+  return `<div class="hero"><div class="herorow">
     <div><span class="eyebrow">Time logged</span><div class="xl">${fmtH(mins)}</div><div class="small">${prev.length ? deltaHTML(pctChange(mins, pm)) + ' <span class="muted">vs previous period</span>' : `<span class="muted">${list.length} sessions</span>`}</div></div>
-    <div style="text-align:right"><span class="eyebrow">Productivity score</span><div class="xl">${Math.round(sum(list.map(score)))}</div><div class="small muted">${f1(avg(list, score))} per session</div></div></div>
+    <div style="text-align:right"><span class="eyebrow">Productivity score</span><div class="xl">${Math.round(sum(list.map(score)))}</div><div class="small muted">${f1(avg(list, score))} per session</div></div></div>${spark(bk.map(x => sum(x.parts.map(p => p.v))))}</div>
   <div class="kpis">${kpi(list.length, 'Sessions')}${kpi(f1(avg(list, s => s.focus)), 'Avg focus')}${kpi(f1(avg(list, s => s.output)), 'Avg output')}${kpi(fmtDur(mins / list.length), 'Avg length')}${kpi(fmtH(deep), 'Deep work')}${kpi(f1(avg(list, distOf)), 'Distractions')}${kpi(st.cur + 'd', 'Streak')}${kpi(st.best + 'd', 'Best streak')}${kpi(fmtDur(sum(list.map(s => (s.pausedMs || 0) / 60000))), 'Break time')}</div>
   <div class="card"><h2>${ic('chart', 17)}${weekly ? 'Hours per week' : 'Hours per day'}<small>Stacked by subject · tap a bar</small></h2>${stackedBars(bk)}${legend(used)}</div>
   <div class="card"><h2>${ic('pie', 17)}Where the time went</h2>${pie(used.map(sb => { const m = sum(list.filter(s => subj(s.subjectId).id === sb.id).map(effMin)); return { name: sb.name, color: sb.color, v: m, fmt: fmtH(m) }; }).sort((x, y) => y.v - x.v))}</div>
@@ -784,6 +828,7 @@ function statsSubjects(list) {
 
 /* --- goals, records, weekly report --- */
 function statsGoals(base) {
+  const ms = milestones();
   const now = Date.now(), all = db.sessions, today = startOfDay(now), wk = weekStart(now), g = db.goals;
   const bar = (label, min, goalH, color) => { const p = goalH ? clamp(min / 60 / goalH * 100, 0, 100) : 0; return `<div class="row between small"><span>${label}</span><span class="muted">${(min / 60).toFixed(1)} / ${goalH}h${p >= 100 ? ' ✓' : ''}</span></div><div class="prog"><div style="width:${p}%;background:${p >= 100 ? 'var(--good)' : color || 'var(--accent)'}"></div></div>`; };
   let goals = '';
@@ -806,6 +851,7 @@ function statsGoals(base) {
   }
   return `<div class="card"><h2>${ic('target', 17)}Goals</h2>${goals || '<div class="muted small">No goals set.</div>'}<div class="small muted">Edit goals in Settings. Per-subject goals are set on each subject.</div></div>
   <div class="card report"><h2>${ic('note', 17)}Weekly report card · last 7 days</h2>${reportCard(base)}</div>
+  <div class="card"><h2>${ic('trophy', 17)}Milestones<small>${ms.filter(m => m.done).length} of ${ms.length} earned · tap one for details</small></h2><div class="badges">${ms.map(m => `<div class="mbadge ${m.done ? 'got' : ''}" data-tip="${esc(m.name + '\n' + m.desc + '\n' + (m.done ? 'Earned' : (m.goal > 1 ? Math.floor(m.cur) + ' of ' + m.goal : 'Not yet')))}"><span>${ic(m.icon, 22)}</span><b>${m.name}</b>${m.done ? '' : `<i><u style="width:${m.cur / m.goal * 100}%"></u></i>`}</div>`).join('')}</div></div>
   <div class="card"><h2>${ic('trophy', 17)}Personal records</h2>${rec}</div>`;
 }
 function reportCard(base) {
@@ -853,7 +899,8 @@ function histList() {
 function viewHistory() {
   const h = ui.hist;
   return `<div class="row between"><h1>History</h1><button class="btn primary" style="min-height:40px;padding:0 14px" data-a="addSession">${ic('plus', 17)}Add</button></div>
-  <div class="search">${ic('search', 17)}<input type="search" placeholder="Search notes and tasks" data-m="hist.q" data-live="hist" value="${esc(h.q)}"></div>
+  ${(w => w.length ? `<div class="trio" style="margin:0 0 16px"><div>${ic('clock')}<b>${fmtH(sum(w.map(effMin)))}</b><span>this week</span></div><div>${ic('layers')}<b>${w.length}</b><span>session${w.length === 1 ? '' : 's'}</span></div><div>${ic('target')}<b>${f1(avg(w, s => s.focus))}</b><span>avg focus</span></div></div>` : '')(db.sessions.filter(s => s.start >= weekStart(Date.now())))}
+  <div class="search">${ic('search', 17)}<input type="search" placeholder="Search notes and tasks\" data-m="hist.q" data-live="hist" value="${esc(h.q)}"></div>
   <div class="row" style="margin:8px 0 4px"><select data-m="hist.subject" data-r>${options(db.subjects, h.subject, 'All subjects')}</select><select data-m="hist.type" data-r>${options(db.types, h.type, 'All types')}</select><select data-m="hist.tag" data-r>${tagOptions(h.tag, 'All boosters')}</select></div>
   <div id="histList">${histList()}</div>`;
 }
@@ -1224,6 +1271,13 @@ const A = {
       save(); ui.modal = { kind: 'sleeplog', data: {} }; render();
     }, 'Clear');
   },
+  nextTip() { ui.tipI++; render(); },
+  // one tap: same subject, type and group as your most recent session, no boosters, no planned length
+  quickStart() {
+    const l = db.sessions.reduce((m, x) => !m || x.start > m.start ? x : m, null); if (!l) return;
+    Object.assign(ui.start, { subjectId: subj(l.subjectId).id || ui.start.subjectId, typeId: typ(l.typeId).id, crewId: crew(l.crewId).id, task: l.task || '', tags: {}, planned: '' });
+    A.start();
+  },
   newSession() { ui.setup = true; scrollTo(0, 0); render(); animate('fwd'); },
   backHome() { ui.setup = false; render(); animate('back'); },
   start() {
@@ -1252,9 +1306,12 @@ const A = {
   backToTimer() { const a = db.active, now = Date.now(); a.ending = false; if (a.endPause) { const gap = now - a.pauseStart; a.start += gap; (a.pauses || []).forEach(p => { p.start += gap; if (p.end) p.end += gap; }); a.pauseStart = null; } save(); render(); animate(); },
   saveActive() {
     const a = db.active, e = ui.end; if (!e.output) return toast('Rate your output first');
+    const had = new Set(milestones().filter(m => m.done).map(m => m.name));
     db.sessions.push(setFocus({ id: uid(), u: Date.now(), subjectId: a.subjectId, typeId: a.typeId, crewId: a.crewId || '', task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focusSelf: e.focus || null, fa: 0, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned }));
     logMood(e.energy, e.mood, a.pauseStart);
-    db.active = null; save(); freshStart(); render(); animate(); toast('Session saved');
+    db.active = null; save(); freshStart(); render(); animate();
+    const won = milestones().filter(m => m.done && !had.has(m.name));
+    toast(won.length ? 'Milestone earned: ' + won.map(m => m.name).join(', ') : 'Session saved');
   },
   discard() { ask('Discard this session? It will not be saved.', () => { db.active = null; save(); freshStart(); render(); animate(); }, 'Discard'); },
   askNo(el, e) { if (e.target !== el && !('force' in el.dataset)) return; $('#ask').innerHTML = ''; askCb = null; },

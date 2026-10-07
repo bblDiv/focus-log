@@ -428,4 +428,32 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px color-mix(in s
 .ckdone.due > .ic { animation: pulse 1.8s ease-in-out infinite; }
 .brk { justify-content: space-between; margin-bottom: 8px; }
 .brk small { font-weight: 400; font-size: 12px; color: var(--muted); }
+.herorow { display: flex; justify-content: space-between; gap: 16px; }
+.hero { display: block; padding-bottom: 0; overflow: hidden; }
+.hero .spark { display: block; width: calc(100% + 36px); height: 46px; margin: 8px -18px 0; }
+.hero:not(:has(.spark)) { padding-bottom: 16px; }
+.quick, .tip { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; margin-top: 10px; padding: 12px 16px; border-radius: 16px; background: var(--card); border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); color: var(--text); font-size: 15px; transition: transform .12s ease, background .15s; }
+.quick:active, .tip:active { transform: scale(.98); background: var(--card2); }
+.quick > .ic { color: var(--accent); }
+.tip { align-items: flex-start; font-size: 14px; line-height: 1.4; color: var(--text2); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--card)), var(--card) 75%); }
+.tip > .ic { color: var(--accent); margin-top: 2px; }
+.tip b { color: var(--text); }
+.tip small { color: var(--muted); font-size: 11px; white-space: nowrap; margin-top: 2px; }
+.badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.mbadge { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 12px 4px 10px; border-radius: 14px; background: var(--card2); cursor: pointer; opacity: .55; transition: transform .16s ease, opacity .16s; }
+.mbadge span { display: flex; width: 44px; height: 44px; border-radius: 50%; align-items: center; justify-content: center; color: var(--muted); border: 1.5px dashed var(--line); }
+.mbadge b { font-size: 12px; font-weight: 600; line-height: 1.2; }
+.mbadge i { display: block; width: 70%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.mbadge u { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.mbadge.got { opacity: 1; }
+.mbadge.got span { color: var(--on-accent); border: 0; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 84%, #fff), var(--accent)); box-shadow: 0 8px 18px -8px color-mix(in srgb, var(--accent) 80%, transparent); }
+.mbadge.sel, .mbadge:active { transform: scale(1.05); opacity: 1; }
+.enter .mbadge.got span { animation: pop .5s cubic-bezier(.3, 1.4, .5, 1) backwards; }
+.group { background: var(--card); border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); border-radius: 18px; padding: 0 14px 16px; margin-bottom: 10px; }
+.group .lbl { margin-top: 16px; }
+.group:last-of-type { border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); }
+.group input, .group .seg { background: var(--card2); }
+.group .chip:not(.on) { background: var(--card2); }
+.trio b { font-family: var(--timer); }
+@media (hover: hover) { .mbadge:hover { transform: scale(1.05); opacity: 1; } .quick:hover, .tip:hover { background: var(--card2); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
