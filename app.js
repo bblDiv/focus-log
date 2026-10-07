@@ -2,7 +2,7 @@
 /* Focus Log — everything lives in localStorage under one versioned key. No network calls. */
 
 const KEY = 'focusLog';
-const SCHEMA = 5;
+const SCHEMA = 6;
 const MID_MS = 3 * 60000; // a booster added later than this counts as "mid-session"
 const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 const GREY = '#8d7f72';
@@ -22,7 +22,11 @@ function applyTheme() {
   document.documentElement.dataset.theme = k;
   document.querySelector('meta[name=theme-color]').content = t.bg;
 }
-const BREAKS = ['Washroom break', 'Stretch break', 'Walk break'];
+const BREAKS = ['Washroom break', 'Stretch break', 'Walk break', 'Phone break'];
+// How much a break counts against focus: washroom is free, stretching or walking counts half,
+// a phone break or any other reason counts in full and is also logged as a distraction. Unanswered = half.
+const breakWeight = r => !r ? 0.5 : /washroom/i.test(r) ? 0 : /stretch|walk/i.test(r) ? 0.5 : 1;
+const BREAK_NOTE = w => w === 0 ? 'does not affect focus' : w < 1 ? 'small effect on focus' : 'counts as a distraction';
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /* ---------- helpers ---------- */
@@ -62,7 +66,7 @@ function defaults() {
     tags: mk(['N-Method', 'E-Boost', 'Music'], ['#9085e9', '#d95926', '#d55181']),
     sessions: [],
     goals: { daily: 2, weekly: 12, subjects: {} },
-    deleted: {}, metaU: 0, checkins: {},
+    deleted: {}, metaU: 0, checkins: {}, moods: [],
     settings: { pin: null, theme: 'coffee', neglectDays: 7, lastSubject: null, lastType: null, lastCrew: null },
     active: null
   };
@@ -80,6 +84,7 @@ function migrate(d) {
   d.deleted ||= {}; d.metaU ||= 0; // v3: sync bookkeeping (when things were deleted / when goals and theme last changed)
   d.goals = Object.assign(def.goals, d.goals); d.goals.subjects ||= {};
   d.settings = Object.assign(def.settings, d.settings);
+  if (!Array.isArray(d.moods)) d.moods = []; // v6: energy/mood check-ins through the day
   d.checkins ||= {}; // v4: one check-in per day, shared by that day's sessions
   d.sessions.forEach(s => { s.tags ||= []; });
   d.schema = SCHEMA;
@@ -114,14 +119,22 @@ function breakMins(list) {
   }
   return { out, n };
 }
-// Focus is measured, not just self-reported: it starts at 5 and loses points for distractions per hour,
-// for break time beyond a healthy 15% of the clock, and for chopping the session into many breaks.
-function autoFocus(s) {
-  const eff = effMin(s), hrs = Math.max(eff, 15) / 60, paused = (s.pausedMs || 0) / 60000;
-  const dph = (s.distractions || 0) / hrs, share = paused / ((paused + eff) || 1), bph = ((s.pauses || []).length || (paused >= 1 ? 1 : 0)) / hrs;
-  const lost = Math.min(3, dph * 0.5) + Math.min(1.5, Math.max(0, share - 0.15) * 5) + Math.min(0.5, Math.max(0, bph - 2) * 0.25);
-  return Math.round(clamp(5 - lost, 1, 5) * 10) / 10;
+// Focus is measured, not just self-reported. It starts at 5 and loses points, mostly for distractions:
+//  - distractions per hour (your taps, plus every phone/other break): 0.6 each, up to 3.5
+//  - weighted break time beyond 15% of the clock: up to 1.5
+//  - more than two non-washroom breaks an hour: up to 0.5
+//  - each stretch or walk break: a small flat 0.15, up to 0.6
+function focusParts(s) {
+  const eff = effMin(s), hrs = Math.max(eff, 15) / 60, paused = (s.pausedMs || 0) / 60000, ps = s.pauses || [];
+  let logged = 0, weighted = 0, asDist = 0, chop = 0, light = 0;
+  for (const p of ps) { const m = (p.end - p.start) / 60000, w = breakWeight(p.reason); logged += m; weighted += m * w; if (w >= 1) asDist++; else if (w > 0 && p.reason) light++; if (w > 0) chop++; }
+  const rest = Math.max(0, paused - logged); weighted += rest * 0.5; if (!ps.length && rest >= 1) chop++; // break time with no reason on record
+  const dist = (s.distractions || 0) + asDist;
+  const lost = Math.min(3.5, dist / hrs * 0.6) + Math.min(1.5, Math.max(0, weighted / ((paused + eff) || 1) - 0.15) * 5) + Math.min(0.5, Math.max(0, chop / hrs - 2) * 0.25) + Math.min(0.6, light * 0.15);
+  return { score: Math.round(clamp(5 - lost, 1, 5) * 10) / 10, dist, asDist, weighted, paused };
 }
+const autoFocus = s => focusParts(s).score;
+const distOf = s => focusParts(s).dist; // taps plus breaks that count as distractions
 // s.fa = measured score, s.focusSelf = your own optional rating, s.focus = what the stats use (60% measured, 40% yours)
 function setFocus(s) {
   if (!('fa' in s) && !('focusSelf' in s)) s.focusSelf = s.focus || null; // session saved before focus was measured
@@ -140,7 +153,7 @@ const ui = {
   tab: 'timer', statsTab: 'overview', cmp: 'focus', pm: 'eff',
   f: { range: '30d', from: '', to: '', subject: '', type: '', tag: '' },
   hist: { subject: '', type: '', tag: '', q: '' },
-  setup: false, ck: null, ckEdit: false, start: null, end: { focus: 0, output: 0, note: '' },
+  setup: false, ck: null, ckEdit: false, start: null, end: { focus: 0, output: 0, note: '', energy: 0, mood: 0 }, now: { energy: 0, mood: 0 },
   modal: null, pinBuf: ''
 };
 function freshStart() {
@@ -264,18 +277,21 @@ function viewStart() {
 // Landing screen: today on a dial, one button, and the optional check-in. Options come on the next screen.
 function viewHome() {
   const s = ui.start, now = Date.now(), today = db.sessions.filter(x => x.start >= startOfDay(now)), min = sum(today.map(effMin)), goal = db.goals.daily, st = streaks(db.sessions);
-  const frac = goal ? clamp(min / 60 / goal, 0, 1) : 0, c = ui.ck, done = db.checkins[ckDay()];
+  const frac = goal ? clamp(min / 60 / goal, 0, 1) : 0, c = ui.ck, done = db.checkins[ckDay()], lm = lastMood();
+  const wk0 = weekStart(now), week = DOW.map((d, i) => { const a0 = addDays(wk0, i); return { name: d, m: minsBetween(db.sessions, a0, addDays(a0, 1)), today: a0 === startOfDay(now) }; }), wmax = Math.max(60, (goal || 0) * 60, ...week.map(w => w.m));
   return `<div class="home">
-  <span class="eyebrow" style="text-align:center">${new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+  <div class="greet"><b>${(h => h < 5 ? 'Late night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 22 ? 'Good evening' : 'Late night')(new Date().getHours())}</b><span>${new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span></div>
   <div class="ringwrap"><svg viewBox="0 0 260 260">${TICKS}<circle class="ring-bg" cx="130" cy="130" r="106"/>${goal ? `<circle class="ring-fg ${frac >= 1 ? 'done' : ''}" style="--full:${RING_C}" cx="130" cy="130" r="106" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C * (1 - frac)}"/>` : ''}</svg>
     <div class="ringin"><span class="eyebrow">Today</span><div class="today">${fmtDur(min)}</div><div class="small muted">${goal ? 'of ' + goal + 'h goal' : 'studied'}</div></div></div>
   <div class="trio"><div>${ic('layers')}<b>${today.length}</b><span>session${today.length === 1 ? '' : 's'}</span></div><div>${ic('flame')}<b>${st.cur}</b><span>day streak</span></div><div>${ic('target')}<b>${goal ? Math.round(frac * 100) + '%' : '–'}</b><span>of goal</span></div></div>
+  <div class="week">${week.map(w => `<div class="${w.today ? 'on' : ''}" data-tip="${w.name}\n${fmtDur(w.m)}"><i style="height:${Math.max(4, w.m / wmax * 42)}px"></i><span>${w.name[0]}</span></div>`).join('')}</div>
   <button class="btn primary block big" data-a="newSession">${ic('play', 20)}New session</button>
   ${done && !ui.ckEdit ? `<button class="ckdone" data-a="ckEdit">${ic('moon', 16)}<span class="grow">Checked in today${ckSummary(done) ? ' · ' + ckSummary(done).replace(/^(\d)/, 'slept $1').toLowerCase() : ''}${done.energy ? ' · energy ' + ENERGY[done.energy - 1].toLowerCase() : ''}${done.mood ? ' · mood ' + MOOD[done.mood - 1].toLowerCase() : ''}</span>${ic('check', 16)}</button>` : `<div class="card checkin">
     <div class="ck-head"><b>Daily check-in</b><span>once a day</span></div>
     ${ckForm('ck', c)}
     <button class="btn block" style="margin-top:10px" data-a="ckSave">${ic('check', 18)}Save check-in</button>
   </div>`}
+  <button class="ckdone ${moodDue() ? 'due' : ''}" style="margin-top:10px" data-a="moodOpen">${ic('sun', 16)}<span class="grow">How are you right now?<span class="isub">${lm ? 'Last check ' + ago(lm.t) + (moodWords(lm) ? ' · ' + moodWords(lm) : '') : 'No energy or mood check yet'}</span></span><span class="chev">›</span></button>
   <button class="btn ghost block" style="margin-top:6px" data-a="sleepLog">${ic('moon', 17)}Sleep log · add or fix another day</button>
   <button class="btn ghost block" data-a="addSession">Add a past session</button></div>`;
 }
@@ -313,7 +329,7 @@ function viewLive(a) {
   </div>`;
 }
 function viewEnd(a) {
-  const e = ui.end, sub = subj(a.subjectId), br = a.pausedMs / 60000, fa = autoFocus({ start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, distractions: a.distractions, pauses: (a.pauses || []).filter(p => p.end) });
+  const e = ui.end, sub = subj(a.subjectId), br = a.pausedMs / 60000, fp = focusParts({ start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, distractions: a.distractions, pauses: (a.pauses || []).filter(p => p.end) }), fa = fp.score;
   return `<div class="done">
     <span class="donebadge">${ic('check', 30)}</span>
     <div class="eyebrow">Session done</div>
@@ -321,10 +337,12 @@ function viewEnd(a) {
     <div class="livehead"><span class="dot" style="background:${sub.color}"></span><b>${esc(sub.name)}</b><span class="muted">· ${fmtTime(a.start)}–${fmtTime(a.pauseStart)}</span></div>
     <div class="sline" style="justify-content:center;margin-top:10px"><span>${ic('bolt', 14)}${a.distractions} distraction${a.distractions === 1 ? '' : 's'}</span>${br >= 1 ? `<span>${ic('cup', 14)}${Math.round(br)}m on break</span>` : ''}</div>
   </div>
-  <div class="card fscore"><div><span class="eyebrow">Focus score</span><b>${f1(fa)}</b><span class="muted"> / 5</span></div><div class="small muted">Measured from ${a.distractions} distraction${a.distractions === 1 ? '' : 's'} and ${(a.pauses || []).filter(p => p.end).length} break${(a.pauses || []).filter(p => p.end).length === 1 ? '' : 's'} (${Math.round(br)}m) over ${fmtDur(elapsedMs(a) / 60000)}.${e.focus ? ` With your rating: <b style="color:var(--text)">${f1(Math.round((0.6 * fa + 0.4 * e.focus) * 10) / 10)}</b>.` : ''}</div></div>
+  <div class="card fscore"><div><span class="eyebrow">Focus score</span><b>${f1(fa)}</b><span class="muted"> / 5</span></div><div class="small muted">${fp.dist} distraction${fp.dist === 1 ? '' : 's'}${fp.asDist ? ` (${a.distractions} tapped + ${fp.asDist} phone/other break${fp.asDist === 1 ? '' : 's'})` : ''} and ${Math.round(br)}m of breaks${br >= 1 ? `, ${Math.round(fp.weighted)}m of it counted` : ''}, over ${fmtDur(elapsedMs(a) / 60000)}.${e.focus ? ` With your rating: <b style="color:var(--text)">${f1(Math.round((0.6 * fa + 0.4 * e.focus) * 10) / 10)}</b>.` : ''}</div></div>
   <span class="lbl">${ic('target', 14)}Your own focus rating <em>· optional</em></span>${rate('end.focus', e.focus)}
   <span class="lbl">${ic('check', 14)}Output <em>· how much got done</em></span>${rate('end.output', e.output)}
   <span class="lbl">${ic('note', 14)}Note <em>· optional</em></span><textarea data-m="end.note" placeholder="What did you get done?">${esc(e.note)}</textarea>
+  <span class="lbl">${ic('sun', 14)}How do you feel now? <em>· optional</em></span>
+  <div class="card" style="padding:10px 14px 6px"><div class="ck-lbl" style="margin-top:6px">Energy</div>${scale('end.energy', e.energy, battery, ENERGY)}<div class="ck-lbl" style="margin-top:8px">Mood</div>${scale('end.mood', e.mood, face, MOOD)}</div>
   <button class="btn primary block big" data-a="saveActive">${ic('check', 20)}Save session</button>
   <div class="row" style="margin-top:10px"><button class="btn grow" data-a="backToTimer">Back to timer</button><button class="btn danger grow" data-a="discard">Discard</button></div>`;
 }
@@ -348,7 +366,7 @@ setInterval(tick, 500);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (ui.startDay !== ckDay() && !ui.modal) { ui.startDay = ckDay(); ui.ck = blankCk(); ui.ckEdit = false; render(); }
-  tick(); syncNow();
+  tick(); syncNow(); maybeAskMood();
 });
 
 /* ================= STATS ================= */
@@ -537,7 +555,7 @@ function statsOverview(list, base, a, b) {
   return `<div class="hero">
     <div><span class="eyebrow">Time logged</span><div class="xl">${fmtH(mins)}</div><div class="small">${prev.length ? deltaHTML(pctChange(mins, pm)) + ' <span class="muted">vs previous period</span>' : `<span class="muted">${list.length} sessions</span>`}</div></div>
     <div style="text-align:right"><span class="eyebrow">Productivity score</span><div class="xl">${Math.round(sum(list.map(score)))}</div><div class="small muted">${f1(avg(list, score))} per session</div></div></div>
-  <div class="kpis">${kpi(list.length, 'Sessions')}${kpi(f1(avg(list, s => s.focus)), 'Avg focus')}${kpi(f1(avg(list, s => s.output)), 'Avg output')}${kpi(fmtDur(mins / list.length), 'Avg length')}${kpi(fmtH(deep), 'Deep work')}${kpi(f1(avg(list, s => s.distractions || 0)), 'Distractions')}${kpi(st.cur + 'd', 'Streak')}${kpi(st.best + 'd', 'Best streak')}${kpi(fmtDur(sum(list.map(s => (s.pausedMs || 0) / 60000))), 'Break time')}</div>
+  <div class="kpis">${kpi(list.length, 'Sessions')}${kpi(f1(avg(list, s => s.focus)), 'Avg focus')}${kpi(f1(avg(list, s => s.output)), 'Avg output')}${kpi(fmtDur(mins / list.length), 'Avg length')}${kpi(fmtH(deep), 'Deep work')}${kpi(f1(avg(list, distOf)), 'Distractions')}${kpi(st.cur + 'd', 'Streak')}${kpi(st.best + 'd', 'Best streak')}${kpi(fmtDur(sum(list.map(s => (s.pausedMs || 0) / 60000))), 'Break time')}</div>
   <div class="card"><h2>${ic('chart', 17)}${weekly ? 'Hours per week' : 'Hours per day'}<small>Stacked by subject · tap a bar</small></h2>${stackedBars(bk)}${legend(used)}</div>
   <div class="card"><h2>${ic('pie', 17)}Where the time went</h2>${pie(used.map(sb => { const m = sum(list.filter(s => subj(s.subjectId).id === sb.id).map(effMin)); return { name: sb.name, color: sb.color, v: m, fmt: fmtH(m) }; }).sort((x, y) => y.v - x.v))}</div>
   <div class="card"><h2>${ic('trend', 17)}Hours per day<small>7-day rolling average</small></h2>${lineChart({ labels: dl, series: [{ name: 'Hours/day', color: ACC, values: rollH }], fmt: v => v.toFixed(2) + 'h', H: 140 })}</div>
@@ -568,7 +586,7 @@ const METRICS = {
   focus: { label: 'Focus', fn: s => s.focus, fmt: v => v.toFixed(2), good: 1, max: 5 },
   output: { label: 'Output', fn: s => s.output, fmt: v => v.toFixed(2), good: 1, max: 5 },
   len: { label: 'Length', fn: effMin, fmt: v => Math.round(v) + 'm', good: 1 },
-  dist: { label: 'Distractions', fn: s => s.distractions || 0, fmt: v => v.toFixed(1), good: -1 },
+  dist: { label: 'Distractions', fn: distOf, fmt: v => v.toFixed(1), good: -1 },
   score: { label: 'Score', fn: score, fmt: v => v.toFixed(1), good: 1 }
 };
 const grpKey = s => tagIds(s).sort().join('+');
@@ -621,7 +639,7 @@ function statsBoosters(list, base, a, b) {
 }
 
 /* --- patterns: time of day, weekday, session length, check-in --- */
-function statsPatterns(list) {
+function statsPatterns(list, base, a, b) {
   const cellW = 13, cellH = 17, L = 28, T = 12, grid = {};
   list.forEach(s => { const k = dowIdx(s.start) + '-' + new Date(s.start).getHours(); (grid[k] ||= []).push(s); });
   let hm = '';
@@ -644,7 +662,7 @@ function statsPatterns(list) {
   const lens = B.map(([lo, hi], i) => fbar(bl[i], list.filter(x => effMin(x) >= lo && effMin(x) < hi)));
   const peak = lens.reduce((bi, it, i) => it.value != null && !it.faded && (bi < 0 || it.value > lens[bi].value) ? i : bi, -1);
   const drop = peak >= 0 ? lens.findIndex((it, i) => i > peak && it.value != null && it.value < lens[peak].value - 0.3) : -1;
-  const brk = breakMins(list), brkTot = sum(Object.values(brk.out)), BRK_COL = [PALETTE[0], PALETTE[2], PALETTE[3], PALETTE[1]];
+  const brk = breakMins(list), brkTot = sum(Object.values(brk.out)), BRK_COL = [PALETTE[0], PALETTE[2], PALETTE[3], PALETTE[7], PALETTE[1]];
   // check-in
   const lvl = key => {
     const gs = [1, 2, 3, 4, 5].map(n => list.filter(s => +s[key] === n));
@@ -655,7 +673,7 @@ function statsPatterns(list) {
   const faded = '<div class="cap muted">Faded bars have fewer than 5 sessions.</div>';
   // Effectiveness: how much of the clock turned into focused, productive work (score ÷ minutes), 0–100%.
   const effPct = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(score)) / m * 100 : null; };
-  const distPh = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(s => s.distractions || 0)) / (m / 60) : null; };
+  const distPh = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(distOf)) / (m / 60) : null; };
   const PLM = { eff: { label: 'Effectiveness', fn: effPct, fmt: v => Math.round(v) + '%', max: 100 }, focus: { label: 'Focus', fn: g => avg(g, s => s.focus), fmt: v => v.toFixed(2), max: 5 }, output: { label: 'Output', fn: g => avg(g, s => s.output), fmt: v => v.toFixed(2), max: 5 }, dist: { label: 'Distractions/hr', fn: distPh, fmt: v => v.toFixed(1) }, hours: { label: 'Hours', fn: g => sum(g.map(effMin)) / 60, fmt: v => v.toFixed(1) + 'h' } };
   const crews = [...db.crews, { id: '', name: 'Not set', color: GREY }].map(p => ({ p, g: list.filter(s => crew(s.crewId).id === p.id) })).filter(x => x.g.length);
   const anyCrew = crews.some(x => x.p.id), M = PLM[ui.pm] || PLM.eff;
@@ -691,6 +709,13 @@ function statsPatterns(list) {
   <div class="card"><h2>${ic('clock', 17)}Focus by session length<small>When do you start fading?</small></h2>${vBars(lens, { max: 5, fmt: v => v.toFixed(1) })}
     <div class="cap">${peak < 0 ? 'Not enough sessions per length yet.' : `Focus peaks in <b>${bl[peak]}</b> minute sessions` + (drop > 0 ? ` and fades from around <b>${bl[drop]}</b>.` : ', with no clear fade after that.')}</div></div>
   <div class="card"><h2>${ic('cup', 17)}Breaks<small>Paused time by reason</small></h2>${brk.n ? pie(Object.entries(brk.out).sort((x, y) => y[1] - x[1]).map(([name, v], i) => ({ name, v, fmt: fmtDur(v), color: name === 'Unspecified' ? GREY : BRK_COL[[...BREAKS, 'Other'].indexOf(name)] || PALETTE[[4, 6, 7, 5][i % 4]] }))) + `<div class="cap"><b>${brk.n}</b> breaks · <b>${fmtDur(brkTot / brk.n)}</b> average · <b>${(brk.n / list.length).toFixed(1)}</b> per session · breaks are <b>${Math.round(brkTot / (brkTot + sum(list.map(effMin))) * 100)}%</b> of clock time</div>` : '<div class="muted small">No breaks logged in this range.</div>'}</div>
+  ${(() => {
+    const ms = db.moods.filter(x => x.t >= a && x.t <= b); if (!ms.length) return `<div class="card"><h2>${ic('sun', 17)}Energy and mood through the day</h2><div class="muted small">Log how you feel a few times a day from the Timer screen to see when your energy and mood peak.</div></div>`;
+    const bg = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ms.filter(x => Math.floor(new Date(x.t).getHours() / 3) === i)), col = k => bg.map(g => avg(g.filter(x => x[k]), x => x[k]));
+    const se = [{ name: 'Energy', color: PALETTE[3], values: col('energy'), ns: bg.map(g => g.length) }, { name: 'Mood', color: PALETTE[4], values: col('mood'), ns: bg.map(g => g.length) }];
+    const pk = k => { const v = col(k); let hi = -1, lo = -1; v.forEach((x, i) => { if (x == null) return; if (hi < 0 || x > v[hi]) hi = i; if (lo < 0 || x < v[lo]) lo = i; }); return hi < 0 || hi === lo ? '' : `<b>${k[0].toUpperCase() + k.slice(1)}</b> peaks around ${fmtHour(hi * 3)}–${fmtHour((hi * 3 + 3) % 24)} and dips around ${fmtHour(lo * 3)}–${fmtHour((lo * 3 + 3) % 24)}.`; };
+    return `<div class="card"><h2>${ic('sun', 17)}Energy and mood through the day<small>From your ${ms.length} check-in${ms.length === 1 ? '' : 's'} in this range, 1–5</small></h2>${groupedBars([0, 1, 2, 3, 4, 5, 6, 7].map(i => fmtHour(i * 3)), se)}${legend(se)}<div class="cap">${[pk('energy'), pk('mood')].filter(Boolean).join(' ') || 'Check in at a few different times of day to see the pattern.'} ${smallN(ms.length)}</div></div>`;
+  })()}
   <div class="card"><h2>${ic('bolt', 17)}Energy before<small>Level 1–5 at check-in → how the session went</small></h2>${lvl('energy')}</div>
   <div class="card"><h2>${ic('smile', 17)}Mood before<small>Level 1–5 at check-in → how the session went</small></h2>${lvl('mood')}</div>`;
 }
@@ -803,7 +828,7 @@ function reportCard(base) {
     <li>Top subject: <b>${esc(subj(top[0]).name)}</b> (${fmtH(top[1])}).</li>
     <li>Best booster combo: <b>${esc(grpName(bc.k))}</b> — avg score ${f1(bc.v)} over ${bc.n} session${bc.n === 1 ? '' : 's'}${bc.n < 5 ? ' <span class="warn">low sample</span>' : ''}.</li>
     <li>Best time: <b>${fmtHour(bt.k * 3)}–${fmtHour((bt.k * 3 + 3) % 24)}</b> (focus ${f1(bt.v)}).</li>
-    <li>Distractions per session: <b>${f1(avg(cur, s => s.distractions || 0))}</b> ${prev.length ? deltaHTML(pctChange(avg(cur, s => s.distractions || 0), avg(prev, s => s.distractions || 0)), -1) : ''}.</li>
+    <li>Distractions per session: <b>${f1(avg(cur, distOf))}</b> ${prev.length ? deltaHTML(pctChange(avg(cur, distOf), avg(prev, distOf)), -1) : ''}.</li>
   </ul>`;
 }
 
@@ -883,7 +908,7 @@ function viewSettings() {
 function renderModal(keepScroll) {
   const m = ui.modal, host = $('#modal'), old = $('.sheet', host), top = old ? old.scrollTop : 0;
   if (!m) { host.innerHTML = ''; return; }
-  const body = { session: modalSession, item: modalItem, pin: modalPin, pause: modalPause, sleeplog: modalSleepLog, ck: modalCk }[m.kind](m.data);
+  const body = { session: modalSession, item: modalItem, pin: modalPin, pause: modalPause, sleeplog: modalSleepLog, ck: modalCk, mood: modalMood }[m.kind](m.data);
   host.innerHTML = `<div class="modal" data-a="closeModal"><div class="sheet ${keepScroll ? 'still' : ''}">${body}</div></div>`;
   if (keepScroll) $('.sheet', host).scrollTop = top;
 }
@@ -937,10 +962,20 @@ function modalCk(d) {
   <button class="btn primary block" style="margin-top:14px" data-a="ckModalSave">${ic('check', 18)}Save</button>
   ${db.checkins[d.day] ? `<button class="btn danger block" style="margin-top:10px" data-a="ckClear">Clear this day</button>` : ''}`;
 }
+function modalMood() {
+  const n = ui.now, today = db.moods.filter(x => x.t >= startOfDay(Date.now())).reverse();
+  return `<div class="row between"><h1 style="font-size:22px">How are you right now?</h1><button class="btn ghost" data-a="closeModal" data-force>Close</button></div>
+  <div class="small muted" style="margin-bottom:6px">${fmtTime(Date.now())} · a few of these through the day show when you are at your best.</div>
+  <div class="ck-lbl">${ic('bolt', 16)}Energy</div>${scale('now.energy', n.energy, battery, ENERGY)}
+  <div class="ck-lbl">${ic('sun', 16)}Mood</div>${scale('now.mood', n.mood, face, MOOD)}
+  <button class="btn primary block" style="margin-top:12px" data-a="moodSave">${ic('check', 18)}Log it</button>
+  ${today.length ? `<span class="lbl">Today</span><div class="ilist" style="margin-top:0;background:var(--card2)">${today.map(x => `<div class="irow"><span class="grow">${fmtTime(x.t)}<span class="isub">${moodWords(x)}</span></span><button class="rm" style="width:34px;height:34px" data-a="moodDel" data-v="${x.id}" aria-label="Delete this check-in">×</button></div>`).join('')}</div>` : ''}`;
+}
 function modalPause(d) {
   return `<h1 style="font-size:24px;margin-bottom:4px">Why are you pausing?</h1><div class="small muted" style="margin-bottom:16px">The clock is stopped. Break time is tracked separately.</div>
-  ${BREAKS.map(b => `<button class="btn block" style="margin-bottom:8px;justify-content:flex-start" data-a="pauseReason" data-v="${b}">${b}</button>`).join('')}
-  <div class="row"><input type="text" maxlength="40" placeholder="Other reason…" data-m="modal.data.other" value="${esc(d.other)}"><button class="btn primary" data-a="pauseReason" data-v="">Save</button></div>`;
+  ${BREAKS.map(b => `<button class="btn block brk" data-a="pauseReason" data-v="${b}"><span>${b}</span><small>${BREAK_NOTE(breakWeight(b))}</small></button>`).join('')}
+  <div class="row"><input type="text" maxlength="40" placeholder="Other reason…" data-m="modal.data.other" value="${esc(d.other)}"><button class="btn primary" data-a="pauseReason" data-v="">Save</button></div>
+  <div class="small muted" style="margin-top:8px">Any other reason counts as a distraction.</div>`;
 }
 function modalPin(d) {
   return `<div class="row between"><h1 style="font-size:22px">Set PIN</h1><button class="btn ghost" data-a="closeModal" data-force>Close</button></div>
@@ -976,9 +1011,23 @@ function saveCheckin(day, f) {
   const sleep = f.none ? 0 : blocks.length ? Math.round(sum(blocks.map(b => sleepHrs(b.bed, b.wake))) * 4) / 4 : null;
   if (sleep == null && !f.energy && !f.mood) { toast('Add your sleep, energy or mood first'); return false; }
   const ck = db.checkins[day] = { blocks, sleep, energy: f.energy || null, mood: f.mood || null, u: Date.now() };
-  for (const x of db.sessions) if (ckDayOf(x.start) === day) Object.assign(x, ckFields(ck), { u: Date.now() });
-  if (db.active && ckDayOf(db.active.start) === day) Object.assign(db.active, ckFields(ck));
+  const put = x => { const f = ckFields(ck); Object.assign(x, { sleep: f.sleep, bed: f.bed, wake: f.wake, sb: f.sb }); if (x.energy == null) x.energy = f.energy; if (x.mood == null) x.mood = f.mood; };
+  for (const x of db.sessions) if (ckDayOf(x.start) === day) { put(x); x.u = Date.now(); }
+  if (db.active && ckDayOf(db.active.start) === day) put(db.active);
   save(); return true;
+}
+const MOOD_GAP = 3 * 3600e3; // ask again after three hours
+function logMood(energy, mood, t = Date.now()) { if (!energy && !mood) return false; db.moods.push({ id: uid(), t, energy: energy || null, mood: mood || null, u: Date.now() }); db.moods.sort((x, y) => x.t - y.t); return true; }
+const lastMood = (before = Date.now()) => { for (let i = db.moods.length - 1; i >= 0; i--) if (db.moods[i].t <= before) return db.moods[i]; return null; };
+const moodDue = () => { const l = lastMood(); return !l || Date.now() - l.t >= MOOD_GAP; };
+const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.floor(m / 60) + 'h ago' : Math.floor(m / 1440) + 'd ago'; };
+const moodWords = x => [x.energy ? 'energy ' + ENERGY[x.energy - 1].toLowerCase() : '', x.mood ? 'mood ' + MOOD[x.mood - 1].toLowerCase() : ''].filter(Boolean).join(' · ');
+// The app can't send reminders while it is closed, so it asks when you open it and it has been a while.
+function maybeAskMood() {
+  if (ui.modal || db.active || !$('#lock').hidden || !moodDue()) return;
+  if (Date.now() - (db.settings.moodAsked || 0) < MOOD_GAP) return; // already asked recently and you dismissed it
+  db.settings.moodAsked = Date.now(); saveLocal();
+  ui.now = { energy: 0, mood: 0 }; ui.modal = { kind: 'mood', data: {} }; renderModal();
 }
 const ckRepaint = el => el.dataset.p === 'ck' ? render() : renderModal(true);
 const numOrNull = v => v === '' || v == null || isNaN(+v) ? null : +v;
@@ -1034,12 +1083,14 @@ function seedDemo() {
     const len = Math.round(25 + R() * 70 + (has[1] ? 15 : 0)), paused = R() < .5 ? Math.round(R() * 8) * 60000 : 0;
     const fr = 2.6 + (sleep - 7) * .35 + (has[0] ? .6 : 0) + (has[1] ? .3 : 0) + (hour < 12 ? .4 : hour >= 21 ? -.5 : 0) - (len > 80 ? .4 : 0) - (night.late ? .4 : 0) + (R() - .5) * 1.6;
     const focus = clamp(Math.round(fr + pEff), 1, 5), self = R() < .6 ? focus : null;
+    db.moods.push({ id: uid() + 'm' + i, u: Date.now(), demo: true, t: start - 5 * 60000, energy: clamp(Math.round(4.3 - Math.abs(hour - 10) * .22 + (sleep - 7) * .3 + (R() - .5) * 1.4), 1, 5), mood: clamp(Math.round(3.4 + (hour >= 21 ? -.6 : 0) + (R() - .5) * 2), 1, 5) });
     db.sessions.push(setFocus({
       id: uid() + i, u: Date.now(), demo: true, subjectId: db.subjects[Math.floor(R() * db.subjects.length)].id, crewId: pl ? pl.id : '', typeId: db.types.length ? db.types[Math.floor(R() * R() * db.types.length)].id : '', task: '',
-      start, end: start + len * 60000 + paused, pausedMs: paused, pauses: paused ? [{ start: start + 6e5, end: start + 6e5 + paused, reason: [...BREAKS, 'Other'][Math.floor(R() * 4)] }] : [], tags, distractions: Math.max(0, Math.round(4 - focus * .6 - (has[2] ? .8 : 0) + R() * 3)),
+      start, end: start + len * 60000 + paused, pausedMs: paused, pauses: paused ? [{ start: start + 6e5, end: start + 6e5 + paused, reason: [...BREAKS, 'Other'][Math.floor(R() * 5)] }] : [], tags, distractions: Math.max(0, Math.round(4 - focus * .6 - (has[2] ? .8 : 0) + R() * 3)),
       focusSelf: self, fa: 0, output: clamp(Math.round(fr + (R() - .5) * 2), 1, 5), note: '', sleep, bed: night.bed, wake: night.wake, sb: night.sb, energy: clamp(Math.round(sleep - 4 + (R() - .5) * 2), 1, 5), mood: clamp(Math.round(3 + (R() - .5) * 3), 1, 5), planned: null
     }));
   }
+  db.moods.sort((x, y) => x.t - y.t);
   save(); render(); toast('Added 60 demo sessions');
 }
 
@@ -1050,7 +1101,7 @@ let sync = null; try { sync = JSON.parse(localStorage.getItem(SYNC_KEY)); } catc
 let syncing = false, syncT, syncAgain = false;
 function saveSync() { sync ? localStorage.setItem(SYNC_KEY, JSON.stringify(sync)) : localStorage.removeItem(SYNC_KEY); }
 // what gets shared: everything except this device's own bits (PIN, running timer, today's check-in)
-const syncDoc = () => ({ schema: SCHEMA, subjects: db.subjects, types: db.types, tags: db.tags, crews: db.crews, sessions: db.sessions, goals: db.goals, shared: { theme: db.settings.theme, neglectDays: db.settings.neglectDays }, deleted: db.deleted, checkins: db.checkins, metaU: db.metaU || 0 });
+const syncDoc = () => ({ schema: SCHEMA, subjects: db.subjects, types: db.types, tags: db.tags, crews: db.crews, sessions: db.sessions, goals: db.goals, shared: { theme: db.settings.theme, neglectDays: db.settings.neglectDays }, deleted: db.deleted, checkins: db.checkins, moods: db.moods, metaU: db.metaU || 0 });
 const b64e = str => { const b = new TextEncoder().encode(str); let o = ''; for (let i = 0; i < b.length; i += 0x8000) o += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(o); };
 const b64d = str => new TextDecoder().decode(Uint8Array.from(atob(str.replace(/\s/g, '')), c => c.charCodeAt(0)));
 const gh = (path, opt = {}) => fetch('https://api.github.com/repos/' + sync.repo + path, { cache: 'no-store', ...opt, headers: { Authorization: 'Bearer ' + sync.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opt.headers || {}) } });
@@ -1090,10 +1141,13 @@ function mergeRemote(r) {
   const m = new Map(db.sessions.map(x => [x.id, x]));
   for (const rs of Array.isArray(r.sessions) ? r.sessions : []) { rs.tags ||= []; const l = m.get(rs.id); if (!l || (rs.u || 0) > (l.u || 0)) m.set(rs.id, rs); }
   db.sessions = [...m.values()]; db.sessions.forEach(setFocus);
+  const mm = new Map(db.moods.map(x => [x.id, x]));
+  for (const x of Array.isArray(r.moods) ? r.moods : []) { const l = mm.get(x.id); if (!l || (x.u || 0) > (l.u || 0)) mm.set(x.id, x); }
+  db.moods = [...mm.values()].sort((x, y) => x.t - y.t);
   for (const [day, c] of Object.entries(r.checkins || {})) if (!db.checkins[day] || (c.u || 0) > (db.checkins[day].u || 0)) db.checkins[day] = c;
   for (const [id, ts] of Object.entries(r.deleted || {})) db.deleted[id] = Math.max(db.deleted[id] || 0, ts);
   const gone = x => (db.deleted[x.id] || 0) >= (x.u || 1);
-  db.sessions = db.sessions.filter(x => !gone(x));
+  db.sessions = db.sessions.filter(x => !gone(x)); db.moods = db.moods.filter(x => !gone(x));
   for (const coll of ['subjects', 'types', 'tags', 'crews']) db[coll] = db[coll].filter(x => !gone(x));
   for (const s of [...db.sessions, db.active]) if (s) s.tags = s.tags.filter(t => tagById(t.id));
   if ((r.metaU || 0) > (db.metaU || 0)) { // goals and theme travel together, newest wins
@@ -1145,17 +1199,20 @@ const A = {
   set(el) {
     const p = el.dataset.path, v = 'n' in el.dataset ? +el.dataset.v : el.dataset.v, cur = getPath(ui, p);
     setPath(ui, p, 'keep' in el.dataset || String(cur) !== String(v) ? v : ('n' in el.dataset ? 0 : ''));
-    p.startsWith('modal.') ? renderModal(true) : render();
+    p.startsWith('modal.') || (ui.modal && ui.modal.kind === 'mood' && p.startsWith('now.')) ? renderModal(true) : render();
     if (p === 'statsTab' || p === 'f.range') animate();
   },
   startTag(el) { const t = ui.start.tags; t[el.dataset.v] ? delete t[el.dataset.v] : t[el.dataset.v] = true; render(); },
   // The check-in is saved the moment you tap it, applies to every session that day, and stays hidden until tomorrow.
-  ckSave() { if (saveCheckin(ckDay(), ui.ck)) { ui.ckEdit = false; ui.ck = blankCk(); render(); toast('Check-in saved'); } },
+  ckSave() { const c = ui.ck, first = !ui.ckEdit; if (saveCheckin(ckDay(), c)) { if (first && logMood(c.energy, c.mood)) save(); ui.ckEdit = false; ui.ck = blankCk(); render(); toast('Check-in saved'); } },
   ckEdit() { ui.ck = ckFormFrom(ckDay()); ui.ckEdit = true; render(); },
   // block editing works the same on the home card and in the sleep-log editor; data-p says which form
   ckAdd(el) { getPath(ui, el.dataset.p).blocks.push({ bed: '', wake: '' }); ckRepaint(el); },
   ckRm(el) { getPath(ui, el.dataset.p).blocks.splice(+el.dataset.v, 1); ckRepaint(el); },
   ckNone(el) { const f = getPath(ui, el.dataset.p); f.none = !f.none; ckRepaint(el); },
+  moodOpen() { ui.now = { energy: 0, mood: 0 }; ui.modal = { kind: 'mood', data: {} }; renderModal(); },
+  moodSave() { if (!logMood(ui.now.energy, ui.now.mood)) return toast('Tap an energy or mood level first'); ui.now = { energy: 0, mood: 0 }; ui.modal = null; save(); render(); toast('Logged'); },
+  moodDel(el) { db.deleted[el.dataset.v] = Date.now(); db.moods = db.moods.filter(x => x.id !== el.dataset.v); save(); renderModal(true); },
   sleepLog() { ui.modal = { kind: 'sleeplog', data: {} }; renderModal(); },
   ckOpen(el) { ui.modal = { kind: 'ck', data: ckFormFrom(el.dataset.v) }; renderModal(); },
   ckModalSave() { if (saveCheckin(ui.modal.data.day, ui.modal.data)) { ui.modal = { kind: 'sleeplog', data: {} }; render(); toast('Sleep saved'); } },
@@ -1171,8 +1228,8 @@ const A = {
   backHome() { ui.setup = false; render(); animate('back'); },
   start() {
     const s = ui.start; if (!s.subjectId) return toast('Pick a subject');
-    db.active = { subjectId: s.subjectId, typeId: s.typeId, crewId: s.crewId || '', task: s.task.trim(), start: Date.now(), pausedMs: 0, pauseStart: null, tags: db.tags.filter(t => s.tags[t.id]).map(t => ({ id: t.id, at: 0 })), distractions: 0, planned: +s.planned > 0 ? +s.planned : null, ...ckFields(db.checkins[ckDay()]), ending: false };
-    db.settings.lastSubject = s.subjectId; db.settings.lastType = s.typeId; db.settings.lastCrew = s.crewId || null; ui.setup = false; ui.end = { focus: 0, output: 0, note: '' };
+    db.active = { subjectId: s.subjectId, typeId: s.typeId, crewId: s.crewId || '', task: s.task.trim(), start: Date.now(), pausedMs: 0, pauseStart: null, tags: db.tags.filter(t => s.tags[t.id]).map(t => ({ id: t.id, at: 0 })), distractions: 0, planned: +s.planned > 0 ? +s.planned : null, ...ckFields(db.checkins[ckDay()]), ...(m => m && Date.now() - m.t < MOOD_GAP ? { energy: m.energy ?? null, mood: m.mood ?? null } : {})(lastMood()), ending: false };
+    db.settings.lastSubject = s.subjectId; db.settings.lastType = s.typeId; db.settings.lastCrew = s.crewId || null; ui.setup = false; ui.end = { focus: 0, output: 0, note: '', energy: 0, mood: 0 };
     save(); render(); animate();
   },
   // pausing stops the clock straight away, then asks why; each break is logged with its reason and length
@@ -1196,6 +1253,7 @@ const A = {
   saveActive() {
     const a = db.active, e = ui.end; if (!e.output) return toast('Rate your output first');
     db.sessions.push(setFocus({ id: uid(), u: Date.now(), subjectId: a.subjectId, typeId: a.typeId, crewId: a.crewId || '', task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focusSelf: e.focus || null, fa: 0, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned }));
+    logMood(e.energy, e.mood, a.pauseStart);
     db.active = null; save(); freshStart(); render(); animate(); toast('Session saved');
   },
   discard() { ask('Discard this session? It will not be saved.', () => { db.active = null; save(); freshStart(); render(); animate(); }, 'Discard'); },
@@ -1273,7 +1331,7 @@ const A = {
   exportJSON() { download('focus-log-backup-' + dayKey(Date.now()) + '.json', JSON.stringify(db, null, 2), 'application/json'); },
   exportCSV() { download('focus-log-' + dayKey(Date.now()) + '.csv', toCSV(), 'text/csv'); },
   seedDemo,
-  clearDemo() { db.sessions.forEach(s => { if (s.demo) db.deleted[s.id] = Date.now(); }); db.sessions = db.sessions.filter(s => !s.demo); save(); render(); toast('Demo data cleared'); },
+  clearDemo() { [...db.sessions, ...db.moods].forEach(s => { if (s.demo) db.deleted[s.id] = Date.now(); }); db.sessions = db.sessions.filter(s => !s.demo); db.moods = db.moods.filter(m => !m.demo); save(); render(); toast('Demo data cleared'); },
   reset() { ask('Erase ALL sessions, subjects, boosters and settings on this device?' + (sync ? ' Sync will be switched off here; the copy in your GitHub repo is not touched.' : ''), () => ask('This cannot be undone. Erase everything?', () => { sync = null; saveSync(); db = defaults(); saveLocal(); applyTheme(); freshStart(); render(); toast('All data reset'); }, 'Erase everything'), 'Erase'); }
 };
 
@@ -1304,6 +1362,7 @@ if (matchMedia('(hover: hover)').matches) document.addEventListener('mousemove',
 
 /* ================= BOOT ================= */
 if (db.settings.pin) { $('#lock').hidden = false; renderLock(); }
+setTimeout(maybeAskMood, 900);
 freshStart(); // needs the check-in helpers above, so it runs here rather than where it is defined
 render(); animate();
 syncNow();

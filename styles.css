@@ -389,4 +389,43 @@ svg.chart circle.hit.sel { fill: color-mix(in srgb, var(--accent) 28%, transpare
   .ckdone:hover { background: var(--card2); animation: nudge .38s ease; }
   .back:hover { text-decoration: underline; }
 }
+/* ---------- Polish layer: depth, a floating tab bar, softer cards ---------- */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(120% 55% at 50% -12%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 62%), radial-gradient(70% 40% at 105% 105%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%); }
+#view { padding-bottom: calc(var(--sab) + 108px); }
+h1 { font-size: 32px; }
+.card, .kpis, .ilist, .profile, .ckdone, .hero { border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035), 0 14px 26px -22px rgba(0, 0, 0, .7); }
+.card, .kpis, .profile, .hero { border-radius: 18px; background: linear-gradient(180deg, color-mix(in srgb, var(--card2) 38%, var(--card)), var(--card)); }
+.sess { border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); border-left: 3px solid var(--c); border-radius: 14px; }
+.hero { padding: 16px 18px; margin-bottom: 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 17%, var(--card)), var(--card) 70%); }
+.filters { background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+#tabs { left: 12px; right: 12px; bottom: max(10px, var(--sab)); max-width: 536px; margin: 0 auto; padding-bottom: 0; border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 24px;
+  background: color-mix(in srgb, var(--card) 84%, transparent); box-shadow: 0 16px 34px -10px rgba(0, 0, 0, .7), inset 0 1px 0 rgba(255, 255, 255, .05); }
+#tabs button { height: 60px; z-index: 0; }
+#tabs button::before { top: 7px; bottom: 7px; left: 14%; right: 14%; width: auto; height: auto; margin: 0; border-radius: 16px; z-index: -1; background: color-mix(in srgb, var(--accent) 15%, transparent); transform: scale(.7); opacity: 0; transition: transform .28s cubic-bezier(.3, 1.4, .5, 1), opacity .2s; }
+#tabs button.on::before { transform: none; opacity: 1; }
+#toast { bottom: calc(var(--sab) + 96px); border-radius: 14px; box-shadow: 0 12px 26px -10px rgba(0, 0, 0, .6); }
+.btn.primary, .seg button.on, .rate button.on, .scale button.on, .grade { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 84%, #fff), var(--accent)); }
+.btn.primary { box-shadow: 0 12px 26px -14px color-mix(in srgb, var(--accent) 90%, transparent), inset 0 1px 0 rgba(255, 255, 255, .35); }
+.btn.big { border-radius: 18px; }
+.ring-fg { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 50%, transparent)); }
+input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.sheet { border-radius: 24px 24px 0 0; border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
+.sheet::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px; background: var(--line); margin: -6px auto 14px; }
+#ask .sheet::before { display: none; }
+.greet { text-align: center; margin-bottom: 4px; }
+.greet b { display: block; font-size: 22px; letter-spacing: -.01em; }
+.greet span { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.week { display: flex; justify-content: center; align-items: flex-end; gap: 16px; height: 70px; margin-top: 16px; }
+.week div { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; cursor: pointer; }
+.week i { width: 10px; border-radius: 5px; background: var(--card2); transition: height .4s ease; }
+.week span { font-size: 11px; color: var(--muted); }
+.week .on i { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent); }
+.week .on span { color: var(--accent); font-weight: 700; }
+.enter .week i { transform-origin: 50% 100%; animation: growY .6s cubic-bezier(.2, .8, .2, 1) .15s backwards; }
+.ckdone .chev { color: var(--muted); font-size: 20px; }
+.ckdone.due { border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--text); }
+.ckdone.due > .ic { animation: pulse 1.8s ease-in-out infinite; }
+.brk { justify-content: space-between; margin-bottom: 8px; }
+.brk small { font-weight: 400; font-size: 12px; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
