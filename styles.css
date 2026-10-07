@@ -122,7 +122,11 @@ h2 small { margin-left: 25px; }
 .ck-lbl { font-size: 13px; color: var(--text2); margin: 18px 0 8px; }
 .ck-lbl { display: flex; align-items: center; }
 .slept { margin-left: auto; font: 600 18px/1 var(--timer); color: var(--accent); }
-.sleep { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sleep { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; margin-bottom: 8px; }
+.sleep .rm { width: 36px; height: 44px; border-radius: 10px; background: var(--card2); color: var(--muted); font-size: 20px; }
+.modal .sleep input, .modal .scale button { background: var(--card2); }
+.modal .scale button.on { background: var(--accent); }
+.isub { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; }
 .sleep label { min-width: 0; }
 .sleep label span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 .sleep input { min-width: 0; min-height: 44px; padding: 8px 10px; background: var(--card2); border-color: transparent; }

@@ -138,18 +138,17 @@ const ui = {
   tab: 'timer', statsTab: 'overview', cmp: 'focus',
   f: { range: '30d', from: '', to: '', subject: '', type: '', tag: '' },
   hist: { subject: '', type: '', tag: '', q: '' },
-  setup: false, ck: { bed: '', wake: '', energy: 0, mood: 0 }, ckEdit: false, start: null, end: { focus: 0, output: 0, note: '' },
+  setup: false, ck: null, ckEdit: false, start: null, end: { focus: 0, output: 0, note: '' },
   modal: null, pinBuf: ''
 };
 function freshStart() {
-  ui.setup = false; ui.startDay = ckDay();
+  ui.setup = false; ui.startDay = ckDay(); ui.ck ||= blankCk();
   ui.start = {
     subjectId: subj(db.settings.lastSubject).id || db.subjects[0]?.id || '',
     typeId: typ(db.settings.lastType).id || db.types[0]?.id || '',
     task: '', tags: {}, planned: ''
   };
 }
-freshStart();
 
 /* ---------- small UI pieces ---------- */
 let toastT;
@@ -268,18 +267,13 @@ function viewHome() {
     <div class="ringin"><span class="eyebrow">Today</span><div class="today">${fmtDur(min)}</div><div class="small muted">${goal ? 'of ' + goal + 'h goal' : 'studied'}</div></div></div>
   <div class="trio"><div>${ic('layers')}<b>${today.length}</b><span>session${today.length === 1 ? '' : 's'}</span></div><div>${ic('flame')}<b>${st.cur}</b><span>day streak</span></div><div>${ic('target')}<b>${goal ? Math.round(frac * 100) + '%' : '–'}</b><span>of goal</span></div></div>
   <button class="btn primary block big" data-a="newSession">${ic('play', 20)}New session</button>
-  ${done && !ui.ckEdit ? `<button class="ckdone" data-a="ckEdit">${ic('moon', 16)}<span class="grow">Checked in today${done.sleep ? ' · slept ' + fmtSleep(done.sleep) : ''}${done.energy ? ' · energy ' + ENERGY[done.energy - 1].toLowerCase() : ''}${done.mood ? ' · mood ' + MOOD[done.mood - 1].toLowerCase() : ''}</span>${ic('check', 16)}</button>` : `<div class="card checkin">
+  ${done && !ui.ckEdit ? `<button class="ckdone" data-a="ckEdit">${ic('moon', 16)}<span class="grow">Checked in today${ckSummary(done) ? ' · ' + ckSummary(done).replace(/^(\d)/, 'slept $1').toLowerCase() : ''}${done.energy ? ' · energy ' + ENERGY[done.energy - 1].toLowerCase() : ''}${done.mood ? ' · mood ' + MOOD[done.mood - 1].toLowerCase() : ''}</span>${ic('check', 16)}</button>` : `<div class="card checkin">
     <div class="ck-head"><b>Daily check-in</b><span>once a day</span></div>
-    <div class="ck-lbl">${ic('moon', 16)}Sleep last night<b class="slept" id="sleepOut">${fmtSleep(sleepHrs(c.bed, c.wake))}</b></div>
-    <div class="sleep">
-      <label><span>Went to bed</span><input type="time" data-m="ck.bed" data-live="sleep" value="${esc(c.bed)}"></label>
-      <label><span>Woke up</span><input type="time" data-m="ck.wake" data-live="sleep" value="${esc(c.wake)}"></label>
-    </div>
-    <div class="ck-lbl">${ic('bolt', 16)}Energy</div>${scale('ck.energy', c.energy, battery, ENERGY)}
-    <div class="ck-lbl">${ic('sun', 16)}Mood</div>${scale('ck.mood', c.mood, face, MOOD)}
+    ${ckForm('ck', c)}
     <button class="btn block" style="margin-top:10px" data-a="ckSave">${ic('check', 18)}Save check-in</button>
   </div>`}
-  <button class="btn ghost block" style="margin-top:6px" data-a="addSession">Add a past session</button></div>`;
+  <button class="btn ghost block" style="margin-top:6px" data-a="sleepLog">${ic('moon', 17)}Sleep log · add or fix another day</button>
+  <button class="btn ghost block" data-a="addSession">Add a past session</button></div>`;
 }
 function viewSetup() {
   const s = ui.start, tasks = [...new Set(db.sessions.slice(-40).map(x => x.task).filter(Boolean))].slice(-12);
@@ -347,7 +341,7 @@ setInterval(tick, 500);
 // Coming back to the app: pull what the other device logged. On a new day, last night's sleep and the "today" numbers must start over.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
-  if (ui.startDay !== ckDay() && !ui.modal) { ui.startDay = ckDay(); ui.ck = { bed: '', wake: '', energy: 0, mood: 0 }; ui.ckEdit = false; render(); }
+  if (ui.startDay !== ckDay() && !ui.modal) { ui.startDay = ckDay(); ui.ck = blankCk(); ui.ckEdit = false; render(); }
   tick(); syncNow();
 });
 
@@ -667,12 +661,20 @@ function statsPatterns(list) {
 /* --- sleep: how last night shows up in the work --- */
 function statsSleep(list) {
   const has = s => s.sleep != null && s.sleep !== '' && !isNaN(+s.sleep), sl = list.filter(has);
-  if (sl.length < 3) return emptyState('moon', 'Log last night’s sleep in the quick check-in on at least 3 sessions to see how it affects your work.');
+  // the log itself: last 14 days straight from the check-ins, so it shows even on days with no sessions
+  const recent = [...Array(14).keys()].reverse().map(i => { const day = ckDayOf(Date.now() - i * 864e5), c = db.checkins[day], bl = ckBlocks(c); return { label: new Date(day + 'T12:00').toLocaleDateString(undefined, { weekday: 'narrow' }), value: c && c.sleep != null ? c.sleep : null, color: c && bl.length > 1 ? PALETTE[6] : undefined, tip: ckDayLabel(day, i) + '\n' + (c && c.sleep != null ? ckSummary(c) + (bl.length ? '\n' + bl.map(b => b.bed + '–' + b.wake).join(', ') : '') : 'Not logged') }; });
+  const logCard = `<div class="card"><h2>${ic('moon', 17)}Sleep log<small>Hours slept, last 14 days · violet = split into blocks</small></h2>${vBars(recent, { fmt: v => v.toFixed(1), H: 150 })}<button class="btn block" style="margin-top:12px" data-a="sleepLog">Open sleep log</button></div>`;
+  if (sl.length < 3) return logCard + emptyState('moon', 'Log your sleep on days with at least 3 sessions in total to see how it affects your work.');
   // one night per day: the first session that day carries it
   const days = {};
-  [...list].sort((x, y) => x.start - y.start).forEach(s => { const d = days[dayKey(s.start)] ||= { min: 0, score: 0, sleep: null, bed: null }; d.min += effMin(s); d.score += score(s); if (d.sleep == null && has(s)) { d.sleep = +s.sleep; d.bed = s.bed || null; } });
+  [...list].sort((x, y) => x.start - y.start).forEach(s => { const d = days[dayKey(s.start)] ||= { min: 0, score: 0, f: 0, o: 0, n: 0, sleep: null, bed: null }; d.min += effMin(s); d.score += score(s); d.f += s.focus; d.o += s.output; d.n++; if (d.sleep == null && has(s)) { d.sleep = +s.sleep; d.bed = s.bed || null; d.sb = s.sb ?? 1; d.energy = s.energy || null; } });
   const nights = Object.values(days).filter(d => d.sleep != null);
-  const SB = [[0, 6, '<6h'], [6, 7, '6–7h'], [7, 8, '7–8h'], [8, 9, '8–9h'], [9, 99, '9h+']];
+  const SB = [[0, 0.01, 'None'], [0.01, 6, '<6h'], [6, 7, '6–7h'], [7, 8, '7–8h'], [8, 9, '8–9h'], [9, 99, '9h+']];
+  // how the sleep was taken: not at all, in one go, or split into blocks
+  const PAT = [['No sleep', d => d.sleep === 0], ['One block', d => d.sleep > 0 && (d.sb || 1) < 2], ['Split sleep', d => d.sleep > 0 && d.sb >= 2]];
+  const pg = PAT.map(([, test]) => nights.filter(test)), en = g => g.filter(d => d.energy);
+  const patSeries = [{ name: 'Energy', color: PALETTE[3], values: pg.map(g => avg(en(g), d => d.energy)), ns: pg.map(g => en(g).length) }, { name: 'Focus', color: PALETTE[0], values: pg.map(g => g.length ? avg(g, d => d.f / d.n) : null), ns: pg.map(g => g.length) }, { name: 'Output', color: PALETTE[1], values: pg.map(g => g.length ? avg(g, d => d.o / d.n) : null), ns: pg.map(g => g.length) }];
+  const patCap = PAT.map(([name], i) => pg[i].length ? `<b>${name}</b>: ${pg[i].length} day${pg[i].length === 1 ? '' : 's'}, ${avg(pg[i], d => d.min / 60).toFixed(1)}h studied${pg[i].length < 5 ? ' <span class="warn">low sample</span>' : ''}` : '').filter(Boolean).join(' · ');
   const bars = (pool, key, fn, fmt, unit) => SB.map(([lo, hi, l]) => { const g = pool.filter(x => +x[key] >= lo && +x[key] < hi); return { label: l, n: g.length, value: g.length ? avg(g, fn) : null, faded: g.length < 5, tip: l + ' of sleep\n' + (g.length ? fmt(avg(g, fn)) : '–') + '\n' + g.length + ' ' + unit + (g.length < 5 ? ' (small sample)' : '') }; });
   const focus = bars(sl, 'sleep', s => s.focus, v => 'Focus ' + v.toFixed(2), 'sessions'), output = bars(sl, 'sleep', s => s.output, v => 'Output ' + v.toFixed(2), 'sessions');
   const hours = bars(nights, 'sleep', d => d.min / 60, v => v.toFixed(1) + 'h studied', 'days'), sc = bars(nights, 'sleep', d => d.score, v => 'Score ' + v.toFixed(0), 'days');
@@ -689,12 +691,15 @@ function statsSleep(list) {
   const bedSeries = [{ name: 'Focus', color: PALETTE[0], values: bg.map(g => avg(g, s => s.focus)), ns: bg.map(g => g.length) }, { name: 'Output', color: PALETTE[1], values: bg.map(g => avg(g, s => s.output)), ns: bg.map(g => g.length) }];
   const bedHours = BB.map(([lo, hi, l]) => { const g = bedN.filter(d => bedH(d.bed) >= lo && bedH(d.bed) < hi); return { label: l, value: g.length ? avg(g, d => d.min / 60) : null, faded: g.length < 5, tip: 'In bed ' + l + '\n' + (g.length ? avg(g, d => d.min / 60).toFixed(1) + 'h studied next day' : '–') + '\n' + g.length + ' days' }; });
   const avgBed = bedN.length ? avg(bedN, d => bedH(d.bed)) : null, clock = h => { const m = Math.round(h * 60) % 1440, hh = Math.floor(m / 60); return (hh % 12 || 12) + ':' + pad(m % 60) + (hh < 12 ? 'am' : 'pm'); };
-  const kpi = (v, l) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`, [bestH] = top(hours);
-  return `<div class="kpis">${kpi(fmtSleep(avg(nights, d => d.sleep)), 'Avg sleep')}${kpi(avgBed == null ? '–' : clock(avgBed), 'Avg bedtime')}${kpi(nights.length, 'Nights logged')}</div>
+  const kpi = (v, l) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`;
+  const energy = bars(nights.filter(d => d.energy), 'sleep', d => d.energy, v => 'Energy ' + v.toFixed(2), 'days');
+  return logCard + `<div class="kpis">${kpi(fmtSleep(avg(nights, d => d.sleep)), 'Avg sleep')}${kpi(avgBed == null ? '–' : clock(avgBed), 'Avg bedtime')}${kpi(nights.length, 'Nights logged')}</div>
   <div class="card"><h2>${ic('chart', 17)}Work done by sleep<small>Hours studied on the day after each amount of sleep</small></h2>${vBars(hours, { fmt: v => v.toFixed(1) + 'h' })}${cap(hours, v => v.toFixed(1) + 'h', 'more time studied')}</div>
   <div class="card"><h2>${ic('spark', 17)}Productivity score by sleep<small>Total score for the day</small></h2>${vBars(sc, { fmt: v => v.toFixed(0) })}${cap(sc, v => v.toFixed(0), 'higher score')}</div>
   <div class="card"><h2>${ic('target', 17)}Focus by sleep<small>Average focus score per session, 1–5</small></h2>${vBars(focus, { max: 5, fmt: v => v.toFixed(1) })}${cap(focus, v => v.toFixed(2), 'focus')}</div>
   <div class="card"><h2>${ic('check', 17)}Output by sleep<small>How much you got done per session, 1–5</small></h2>${vBars(output, { max: 5, fmt: v => v.toFixed(1) })}${cap(output, v => v.toFixed(2), 'output')}${faded}</div>
+  <div class="card"><h2>${ic('bolt', 17)}Energy by sleep<small>How you rated your energy after each amount of sleep, 1–5</small></h2>${energy.some(x => x.value != null) ? vBars(energy, { max: 5, fmt: v => v.toFixed(1) }) + cap(energy, v => v.toFixed(2), 'energy') : '<div class="muted small">Rate your energy in the check-in to see this.</div>'}</div>
+  <div class="card"><h2>${ic('layers', 17)}How you slept<small>No sleep vs one block vs split into blocks</small></h2>${groupedBars(PAT.map(p => p[0]), patSeries)}${legend(patSeries)}<div class="cap">${patCap}</div></div>
   <div class="card"><h2>${ic('spark', 17)}Every session<small>Hours slept against focus</small></h2>${scatter(pts, 'Sleep (hrs)', ACC)}${reg ? `<div class="cap">r = ${reg.r.toFixed(2)}, ${strength(reg.r)}. Each extra hour of sleep ≈ <b>${reg.m >= 0 ? '+' : ''}${reg.m.toFixed(2)}</b> focus. ${smallN(pts.length)}</div>` : ''}</div>
   ${bedS.length >= 3 ? `<div class="card"><h2>${ic('moon', 17)}Bedtime<small>Focus and output by when you went to bed</small></h2>${groupedBars(BB.map(b => b[2]), bedSeries)}${legend(bedSeries)}</div>
   <div class="card"><h2>${ic('moon', 17)}Bedtime and work done<small>Hours studied the next day</small></h2>${vBars(bedHours, { fmt: v => v.toFixed(1) + 'h' })}</div>` : `<div class="card"><h2>${ic('moon', 17)}Bedtime</h2><div class="muted small">Enter bed and wake times in the check-in on at least 3 sessions to see this.</div></div>`}`;
@@ -841,7 +846,7 @@ function viewSettings() {
 function renderModal(keepScroll) {
   const m = ui.modal, host = $('#modal'), old = $('.sheet', host), top = old ? old.scrollTop : 0;
   if (!m) { host.innerHTML = ''; return; }
-  const body = { session: modalSession, item: modalItem, pin: modalPin, pause: modalPause }[m.kind](m.data);
+  const body = { session: modalSession, item: modalItem, pin: modalPin, pause: modalPause, sleeplog: modalSleepLog, ck: modalCk }[m.kind](m.data);
   host.innerHTML = `<div class="modal" data-a="closeModal"><div class="sheet ${keepScroll ? 'still' : ''}">${body}</div></div>`;
   if (keepScroll) $('.sheet', host).scrollTop = top;
 }
@@ -876,6 +881,24 @@ function modalItem(d) {
   <button class="btn primary block" style="margin-top:18px" data-a="saveItem">Save</button>
   ${d.id ? `<button class="btn danger block" style="margin-top:10px" data-a="deleteItem">Delete ${n}</button>` : ''}`;
 }
+const ckDayLabel = (day, i) => i === 0 ? 'Today' : i === 1 ? 'Yesterday' : fmtDate(new Date(day + 'T12:00').getTime());
+function modalSleepLog() {
+  const rows = [...Array(21).keys()].map(i => {
+    const day = ckDayOf(Date.now() - i * 864e5), c = db.checkins[day], bl = ckBlocks(c), logged = c && (c.sleep != null || c.energy || c.mood);
+    const detail = !logged ? 'Not logged' : [bl.map(b => b.bed + '–' + b.wake).join(', '), c.energy ? 'energy ' + ENERGY[c.energy - 1].toLowerCase() : '', c.mood ? 'mood ' + MOOD[c.mood - 1].toLowerCase() : ''].filter(Boolean).join(' · ');
+    return `<button class="irow" data-a="ckOpen" data-v="${day}">${tile(logged ? 'moon' : 'plus')}<span class="grow">${ckDayLabel(day, i)}<span class="isub">${esc(detail || '—')}</span></span><span class="ival">${logged ? ckSummary(c) : ''}</span><span class="chev">›</span></button>`;
+  }).join('');
+  return `<div class="row between"><h1 style="font-size:22px">Sleep log</h1><button class="btn ghost" data-a="closeModal" data-force>Close</button></div>
+  <div class="small muted" style="margin-bottom:12px">Tap any day to add or fix its sleep. A day's sleep is the sleep you got before that day's work, even if it started at 8am after an all-nighter.</div>
+  <div class="ilist" style="margin-top:0;background:var(--card2)">${rows}</div>`;
+}
+function modalCk(d) {
+  const i = [...Array(21).keys()].find(n => ckDayOf(Date.now() - n * 864e5) === d.day);
+  return `<div class="row between"><h1 style="font-size:22px">${ckDayLabel(d.day, i)}</h1><button class="btn ghost" data-a="sleepLog">‹ Log</button></div>
+  ${ckForm('modal.data', d)}
+  <button class="btn primary block" style="margin-top:14px" data-a="ckModalSave">${ic('check', 18)}Save</button>
+  ${db.checkins[d.day] ? `<button class="btn danger block" style="margin-top:10px" data-a="ckClear">Clear this day</button>` : ''}`;
+}
 function modalPause(d) {
   return `<h1 style="font-size:24px;margin-bottom:4px">Why are you pausing?</h1><div class="small muted" style="margin-bottom:16px">The clock is stopped. Break time is tracked separately.</div>
   ${BREAKS.map(b => `<button class="btn block" style="margin-bottom:8px;justify-content:flex-start" data-a="pauseReason" data-v="${b}">${b}</button>`).join('')}
@@ -890,7 +913,36 @@ function sessionForm(s) {
   if (!s) return { id: null, subjectId: ui.start.subjectId, typeId: ui.start.typeId, task: '', date: localISO(Date.now() - 3600e3), dur: 50, paused: '', distractions: 0, tags: {}, focus: 0, output: 0, sleep: '', energy: 0, mood: 0, note: '' };
   return { id: s.id, subjectId: s.subjectId, typeId: s.typeId || '', task: s.task || '', date: localISO(s.start), dur: Math.round(effMin(s)), paused: Math.round((s.pausedMs || 0) / 60000) || '', distractions: s.distractions || 0, tags: Object.fromEntries(s.tags.map(t => [t.id, t.at || 0])), focus: s.focusSelf || 0, output: s.output, sleep: s.sleep ?? '', energy: s.energy || 0, mood: s.mood || 0, note: s.note || '' };
 }
-const ckFields = c => ({ sleep: c?.sleep ?? null, bed: c?.bed ?? null, wake: c?.wake ?? null, energy: c?.energy ?? null, mood: c?.mood ?? null });
+// A day's sleep can be several blocks (3:30–8:00, then 10:00–12:00) or none at all (all-nighter).
+const ckBlocks = c => !c ? [] : Array.isArray(c.blocks) ? c.blocks : c.bed && c.wake ? [{ bed: c.bed, wake: c.wake }] : []; // older check-ins had one bed/wake pair
+const blankCk = () => ({ blocks: [{ bed: '', wake: '' }], none: false, energy: 0, mood: 0 });
+const ckTotal = f => f.none ? 0 : (sum(f.blocks.map(b => sleepHrs(b.bed, b.wake) || 0)) || null);
+// what each session that day carries: total hours, first bedtime, last wake, number of blocks (sb)
+const ckFields = c => { const bl = ckBlocks(c), slept = c?.sleep ?? null; return { sleep: slept, bed: bl[0]?.bed ?? null, wake: bl.length ? bl[bl.length - 1].wake : null, sb: slept == null ? null : bl.length, energy: c?.energy ?? null, mood: c?.mood ?? null }; };
+const ckFormFrom = day => { const c = db.checkins[day], bl = ckBlocks(c); return { day, blocks: bl.length ? bl.map(b => ({ ...b })) : [{ bed: '', wake: '' }], none: !!c && c.sleep === 0, energy: c?.energy || 0, mood: c?.mood || 0 }; };
+const ckSummary = c => { const bl = ckBlocks(c); return c.sleep === 0 ? 'No sleep' : c.sleep ? fmtSleep(c.sleep) + (bl.length > 1 ? ' in ' + bl.length + ' blocks' : '') : ''; };
+function ckForm(p, f) { // shared by the home card (p = 'ck') and the sleep-log editor (p = 'modal.data')
+  return `<div class="ck-lbl">${ic('moon', 16)}Sleep<b class="slept" id="sleepOut">${f.none ? 'No sleep' : fmtSleep(ckTotal(f))}</b></div>
+    ${f.none ? '' : f.blocks.map((b, i) => `<div class="sleep">
+      <label><span>${i ? 'Slept again at' : 'Went to bed'}</span><input type="time" data-m="${p}.blocks.${i}.bed" data-live="sleep" data-p="${p}" value="${esc(b.bed)}"></label>
+      <label><span>Woke up</span><input type="time" data-m="${p}.blocks.${i}.wake" data-live="sleep" data-p="${p}" value="${esc(b.wake)}"></label>
+      ${f.blocks.length > 1 ? `<button class="rm" data-a="ckRm" data-p="${p}" data-v="${i}" aria-label="Remove this block">×</button>` : ''}</div>`).join('')}
+    <div class="chips" style="margin-top:10px">${f.none ? '' : `<button class="chip sm dash" data-a="ckAdd" data-p="${p}">+ Another sleep block</button>`}<button class="chip sm ${f.none ? 'on' : ''}" data-a="ckNone" data-p="${p}">No sleep</button></div>
+    <div class="ck-lbl">${ic('bolt', 16)}Energy</div>${scale(p + '.energy', f.energy, battery, ENERGY)}
+    <div class="ck-lbl">${ic('sun', 16)}Mood</div>${scale(p + '.mood', f.mood, face, MOOD)}`;
+}
+// Save one day's check-in and stamp it onto every session of that day. Returns false (with a toast) if it isn't valid.
+function saveCheckin(day, f) {
+  const blocks = f.none ? [] : f.blocks.filter(b => b.bed || b.wake);
+  if (blocks.some(b => !sleepHrs(b.bed, b.wake))) { toast('Each sleep block needs a bed time and a wake time'); return false; }
+  const sleep = f.none ? 0 : blocks.length ? Math.round(sum(blocks.map(b => sleepHrs(b.bed, b.wake))) * 4) / 4 : null;
+  if (sleep == null && !f.energy && !f.mood) { toast('Add your sleep, energy or mood first'); return false; }
+  const ck = db.checkins[day] = { blocks, sleep, energy: f.energy || null, mood: f.mood || null, u: Date.now() };
+  for (const x of db.sessions) if (ckDayOf(x.start) === day) Object.assign(x, ckFields(ck), { u: Date.now() });
+  if (db.active && ckDayOf(db.active.start) === day) Object.assign(db.active, ckFields(ck));
+  save(); return true;
+}
+const ckRepaint = el => el.dataset.p === 'ck' ? render() : renderModal(true);
 const numOrNull = v => v === '' || v == null || isNaN(+v) ? null : +v;
 
 /* ================= LOCK ================= */
@@ -937,7 +989,7 @@ function seedDemo() {
     const hour = hours[Math.floor(R() * hours.length)];
     let start = addDays(startOfDay(now), -Math.floor(R() * 45)) + hour * 3600e3 + Math.floor(R() * 40) * 60000;
     if (start > now - 4 * 3600e3) start -= 864e5;
-    const night = nights[dayKey(start)] ||= (() => { const sl = Math.round((5 + R() * 4) * 2) / 2, b = Math.round((22 + R() * 4.5) * 4) / 4, hm = h => pad(Math.floor(h) % 24) + ':' + pad(Math.round(h % 1 * 60)); return { sleep: sl, bed: hm(b), wake: hm(b + sl), late: b >= 25 }; })();
+    const night = nights[dayKey(start)] ||= (() => { const sl = Math.round((5 + R() * 4) * 2) / 2, b = Math.round((22 + R() * 4.5) * 4) / 4, hm = h => pad(Math.floor(h) % 24) + ':' + pad(Math.round(h % 1 * 60)); const r = R(); return r < .06 ? { sleep: 0, bed: null, wake: null, sb: 0, late: true } : { sleep: sl, bed: hm(b), wake: hm(b + sl), sb: r < .25 ? 2 : 1, late: b >= 25 }; })();
     const sleep = night.sleep, has = T.map((_, j) => R() < (prob[j] ?? .2));
     const tags = T.filter((_, j) => has[j]).map(t => ({ id: t.id, at: R() < .3 ? Math.round((8 + R() * 25)) * 60000 : 0 }));
     const len = Math.round(25 + R() * 70 + (has[1] ? 15 : 0)), paused = R() < .5 ? Math.round(R() * 8) * 60000 : 0;
@@ -946,7 +998,7 @@ function seedDemo() {
     db.sessions.push(setFocus({
       id: uid() + i, u: Date.now(), demo: true, subjectId: db.subjects[Math.floor(R() * db.subjects.length)].id, typeId: db.types.length ? db.types[Math.floor(R() * R() * db.types.length)].id : '', task: '',
       start, end: start + len * 60000 + paused, pausedMs: paused, pauses: paused ? [{ start: start + 6e5, end: start + 6e5 + paused, reason: [...BREAKS, 'Other'][Math.floor(R() * 4)] }] : [], tags, distractions: Math.max(0, Math.round(4 - focus * .6 - (has[2] ? .8 : 0) + R() * 3)),
-      focusSelf: self, fa: 0, output: clamp(Math.round(fr + (R() - .5) * 2), 1, 5), note: '', sleep, bed: night.bed, wake: night.wake, energy: clamp(Math.round(sleep - 4 + (R() - .5) * 2), 1, 5), mood: clamp(Math.round(3 + (R() - .5) * 3), 1, 5), planned: null
+      focusSelf: self, fa: 0, output: clamp(Math.round(fr + (R() - .5) * 2), 1, 5), note: '', sleep, bed: night.bed, wake: night.wake, sb: night.sb, energy: clamp(Math.round(sleep - 4 + (R() - .5) * 2), 1, 5), mood: clamp(Math.round(3 + (R() - .5) * 3), 1, 5), planned: null
     }));
   }
   save(); render(); toast('Added 60 demo sessions');
@@ -1058,16 +1110,23 @@ const A = {
   },
   startTag(el) { const t = ui.start.tags; t[el.dataset.v] ? delete t[el.dataset.v] : t[el.dataset.v] = true; render(); },
   // The check-in is saved the moment you tap it, applies to every session that day, and stays hidden until tomorrow.
-  ckSave() {
-    const c = ui.ck, sleep = sleepHrs(c.bed, c.wake);
-    if (!sleep && !c.energy && !c.mood) return toast('Add your sleep, energy or mood first');
-    if ((c.bed || c.wake) && !sleep) return toast('Enter both a bed time and a wake time');
-    const day = ckDay(), ck = db.checkins[day] = { bed: c.bed || null, wake: c.wake || null, sleep, energy: c.energy || null, mood: c.mood || null, u: Date.now() };
-    for (const x of db.sessions) if (ckDayOf(x.start) === day) Object.assign(x, ckFields(ck), { u: Date.now() });
-    if (db.active && ckDayOf(db.active.start) === day) Object.assign(db.active, ckFields(ck));
-    ui.ckEdit = false; save(); render(); toast('Check-in saved');
+  ckSave() { if (saveCheckin(ckDay(), ui.ck)) { ui.ckEdit = false; ui.ck = blankCk(); render(); toast('Check-in saved'); } },
+  ckEdit() { ui.ck = ckFormFrom(ckDay()); ui.ckEdit = true; render(); },
+  // block editing works the same on the home card and in the sleep-log editor; data-p says which form
+  ckAdd(el) { getPath(ui, el.dataset.p).blocks.push({ bed: '', wake: '' }); ckRepaint(el); },
+  ckRm(el) { getPath(ui, el.dataset.p).blocks.splice(+el.dataset.v, 1); ckRepaint(el); },
+  ckNone(el) { const f = getPath(ui, el.dataset.p); f.none = !f.none; ckRepaint(el); },
+  sleepLog() { ui.modal = { kind: 'sleeplog', data: {} }; renderModal(); },
+  ckOpen(el) { ui.modal = { kind: 'ck', data: ckFormFrom(el.dataset.v) }; renderModal(); },
+  ckModalSave() { if (saveCheckin(ui.modal.data.day, ui.modal.data)) { ui.modal = { kind: 'sleeplog', data: {} }; render(); toast('Sleep saved'); } },
+  ckClear() {
+    const day = ui.modal.data.day;
+    ask('Clear the sleep, energy and mood logged for this day?', () => {
+      db.checkins[day] = { blocks: [], sleep: null, energy: null, mood: null, u: Date.now() };
+      for (const x of db.sessions) if (ckDayOf(x.start) === day) Object.assign(x, ckFields(null), { u: Date.now() });
+      save(); ui.modal = { kind: 'sleeplog', data: {} }; render();
+    }, 'Clear');
   },
-  ckEdit() { const d = db.checkins[ckDay()]; ui.ck = { bed: d.bed || '', wake: d.wake || '', energy: d.energy || 0, mood: d.mood || 0 }; ui.ckEdit = true; render(); },
   newSession() { ui.setup = true; scrollTo(0, 0); render(); animate('fwd'); },
   backHome() { ui.setup = false; render(); animate('back'); },
   start() {
@@ -1189,7 +1248,7 @@ document.addEventListener('input', e => {
   const el = e.target; if (!el.dataset || !el.dataset.m) return;
   setPath(ui, el.dataset.m, el.value);
   if (el.dataset.live === 'hist') $('#histList').innerHTML = histList();
-  if (el.dataset.live === 'sleep') $('#sleepOut').textContent = fmtSleep(sleepHrs(ui.ck.bed, ui.ck.wake));
+  if (el.dataset.live === 'sleep') $('#sleepOut').textContent = fmtSleep(ckTotal(getPath(ui, el.dataset.p)));
 });
 document.addEventListener('change', e => {
   const el = e.target;
@@ -1205,6 +1264,7 @@ if (matchMedia('(hover: hover)').matches) document.addEventListener('mousemove',
 
 /* ================= BOOT ================= */
 if (db.settings.pin) { $('#lock').hidden = false; renderLock(); }
+freshStart(); // needs the check-in helpers above, so it runs here rather than where it is defined
 render(); animate();
 syncNow();
 // ask the browser not to evict this site's storage when space runs low
