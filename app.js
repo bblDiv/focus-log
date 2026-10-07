@@ -2,7 +2,7 @@
 /* Focus Log — everything lives in localStorage under one versioned key. No network calls. */
 
 const KEY = 'focusLog';
-const SCHEMA = 4;
+const SCHEMA = 5;
 const MID_MS = 3 * 60000; // a booster added later than this counts as "mid-session"
 const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 const GREY = '#8d7f72';
@@ -58,11 +58,12 @@ function defaults() {
     schema: SCHEMA,
     subjects: mk(['Math', 'Physics', 'Computer Science', 'Writing']),
     types: mk(['Study', 'Assignment', 'Project', 'Club work']),
+    crews: mk(['Alone', 'Bits', 'Weband', 'Others'], ['#898781', '#3987e5', '#d95926', '#199e70']), // v5: who you studied with
     tags: mk(['N-Method', 'E-Boost', 'Music'], ['#9085e9', '#d95926', '#d55181']),
     sessions: [],
     goals: { daily: 2, weekly: 12, subjects: {} },
     deleted: {}, metaU: 0, checkins: {},
-    settings: { pin: null, theme: 'coffee', neglectDays: 7, lastSubject: null, lastType: null },
+    settings: { pin: null, theme: 'coffee', neglectDays: 7, lastSubject: null, lastType: null, lastCrew: null },
     active: null
   };
 }
@@ -70,7 +71,7 @@ function defaults() {
 function migrate(d) {
   const def = defaults();
   if (!d.schema) d.schema = 1;
-  for (const k of ['subjects', 'types', 'tags', 'sessions']) if (!Array.isArray(d[k])) d[k] = def[k];
+  for (const k of ['subjects', 'types', 'tags', 'crews', 'sessions']) if (!Array.isArray(d[k])) d[k] = def[k];
   if (d.schema < 2) { // v2 dropped the "Library" and "Phone Away" boosters
     const gone = new Set(d.tags.filter(t => t.name === 'Library' || t.name === 'Phone Away').map(t => t.id));
     d.tags = d.tags.filter(t => !gone.has(t.id));
@@ -98,6 +99,7 @@ let db;
 
 const UNKNOWN = { id: '', name: 'Deleted', color: GREY };
 const subj = id => db.subjects.find(x => x.id === id) || UNKNOWN;
+const crew = id => db.crews.find(x => x.id === id) || { id: '', name: '', color: GREY };
 const typ = id => db.types.find(x => x.id === id) || { id: '', name: '', color: GREY };
 const tagById = id => db.tags.find(x => x.id === id);
 const effMin = s => Math.max(0, (s.end - s.start - (s.pausedMs || 0)) / 60000);
@@ -135,7 +137,7 @@ db = load();
 applyTheme();
 
 const ui = {
-  tab: 'timer', statsTab: 'overview', cmp: 'focus',
+  tab: 'timer', statsTab: 'overview', cmp: 'focus', pm: 'eff',
   f: { range: '30d', from: '', to: '', subject: '', type: '', tag: '' },
   hist: { subject: '', type: '', tag: '', q: '' },
   setup: false, ck: null, ckEdit: false, start: null, end: { focus: 0, output: 0, note: '' },
@@ -146,6 +148,7 @@ function freshStart() {
   ui.start = {
     subjectId: subj(db.settings.lastSubject).id || db.subjects[0]?.id || '',
     typeId: typ(db.settings.lastType).id || db.types[0]?.id || '',
+    crewId: crew(db.settings.lastCrew).id || db.crews[0]?.id || '', // defaults to the first group ("Alone") until you pick another
     task: '', tags: {}, planned: ''
   };
 }
@@ -204,6 +207,7 @@ const ICONS = {
   trend: '<path d="M3 17l6-6 4 4 8-8M15 7h6v6"/>',
   note: '<path d="M5 5h14v10l-4 4H5zM15 19v-4h4M8 9h8M8 12.5h5"/>',
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 13.8c2.2.6 3.5 2.4 3.5 5.2"/>',
   cloud: '<path d="M7 18a4 4 0 0 1-.5-8A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/>',
   cup: '<path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5zM16 10h2a2.5 2.5 0 0 1 0 5h-2M8 3v3M12 3v3"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M9 9.5v1M15 9.5v1M8 14q4 4 8 0"/>',
@@ -283,6 +287,8 @@ function viewSetup() {
   <div class="group"><span class="lbl">${ic('layers', 14)}Type</span>${pick(db.types, 'start.typeId', s.typeId)}
     <input type="text" style="margin-top:12px" placeholder="Working on… (optional)" data-m="start.task" value="${esc(s.task)}" list="tasks">
     <datalist id="tasks">${tasks.map(t => `<option value="${esc(t)}">`).join('')}</datalist></div>
+  ${db.crews.length ? `<div class="group"><span class="lbl">${ic('people', 14)}Studying with <em>· tap again to clear</em></span>
+    <div class="chips">${db.crews.map(x => `<button class="chip ${s.crewId === x.id ? 'on' : ''}" style="--c:${x.color}" data-a="set" data-path="start.crewId" data-v="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div></div>` : ''}
   <div class="group"><span class="lbl">${ic('spark', 14)}Boosters <em>· leave empty for none</em></span>
     <div class="chips">${db.tags.map(t => `<button class="chip ${s.tags[t.id] ? 'on' : ''}" style="--c:${t.color}" data-a="startTag" data-v="${t.id}"><i></i>${esc(t.name)}</button>`).join('')}</div></div>
   <div class="group"><span class="lbl">${ic('clock', 14)}Planned length</span>
@@ -293,7 +299,7 @@ function viewSetup() {
 function viewLive(a) {
   const sub = subj(a.subjectId), ty = typ(a.typeId);
   return `<div class="live ${a.pauseStart ? 'paused' : ''}">
-  <div class="livehead"><span class="dot" style="background:${sub.color}"></span><b>${esc(sub.name)}</b>${ty.name ? `<span class="muted">· ${esc(ty.name)}</span>` : ''}</div>
+  <div class="livehead"><span class="dot" style="background:${sub.color}"></span><b>${esc(sub.name)}</b>${ty.name ? `<span class="muted">· ${esc(ty.name)}</span>` : ''}${crew(a.crewId).name ? `<span class="muted">· ${esc(crew(a.crewId).name)}</span>` : ''}</div>
   ${a.task ? `<div class="small muted">${esc(a.task)}</div>` : ''}
   <div class="ringwrap"><svg viewBox="0 0 260 260">${TICKS}<circle class="ring-bg" cx="130" cy="130" r="106"/><circle id="ring" class="ring-fg ${a.planned ? '' : 'sweep'}" cx="130" cy="130" r="106" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"/></svg>
     <div class="ringin"><span class="eyebrow" id="tState"></span><div class="elapsed" id="tElapsed">0:00</div><div class="small muted" id="tSub"></div></div></div>
@@ -647,7 +653,38 @@ function statsPatterns(list) {
     return groupedBars(['1', '2', '3', '4', '5'], series) + legend(series) + (gs.some(g => g.length && g.length < 5) ? `<div class="cap"><span class="warn">low sample</span> Some levels have fewer than 5 sessions.</div>` : '');
   };
   const faded = '<div class="cap muted">Faded bars have fewer than 5 sessions.</div>';
-  return `<div class="card"><h2>${ic('sun', 17)}Focus by time of day</h2>${vBars(blocks, { max: 5, fmt: v => v.toFixed(1) })}${bt ? `<div class="cap">Best: <b>${bt.full}</b> (${bt.value.toFixed(2)})${wt && wt !== bt ? ` · Worst: <b>${wt.full}</b> (${wt.value.toFixed(2)})` : ''}</div>` : ''}${blocks.some(x => x.faded && x.value != null) ? faded : ''}</div>
+  // Effectiveness: how much of the clock turned into focused, productive work (score ÷ minutes), 0–100%.
+  const effPct = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(score)) / m * 100 : null; };
+  const distPh = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(s => s.distractions || 0)) / (m / 60) : null; };
+  const PLM = { eff: { label: 'Effectiveness', fn: effPct, fmt: v => Math.round(v) + '%', max: 100 }, focus: { label: 'Focus', fn: g => avg(g, s => s.focus), fmt: v => v.toFixed(2), max: 5 }, output: { label: 'Output', fn: g => avg(g, s => s.output), fmt: v => v.toFixed(2), max: 5 }, dist: { label: 'Distractions/hr', fn: distPh, fmt: v => v.toFixed(1) }, hours: { label: 'Hours', fn: g => sum(g.map(effMin)) / 60, fmt: v => v.toFixed(1) + 'h' } };
+  const crews = [...db.crews, { id: '', name: 'Not set', color: GREY }].map(p => ({ p, g: list.filter(s => crew(s.crewId).id === p.id) })).filter(x => x.g.length);
+  const anyCrew = crews.some(x => x.p.id), M = PLM[ui.pm] || PLM.eff;
+  const placeBars = hBars(crews.map(x => ({ name: x.p.name, color: x.p.color, value: M.fn(x.g), extra: x.g.length < 5 ? '<span class="warn">low sample</span>' : '', tip: x.p.name + '\n' + M.label + ': ' + M.fmt(M.fn(x.g)) + '\n' + x.g.length + ' sessions · ' + fmtH(sum(x.g.map(effMin))) })).sort((a, b) => (b.value || 0) - (a.value || 0)), M.fmt, M.max);
+  const hourOf = s => new Date(s.start).getHours(), blk = i => list.filter(s => Math.floor(hourOf(s) / 3) === i);
+  const tbar = (fn, fmt, word) => [0, 1, 2, 3, 4, 5, 6, 7].map(i => { const g = blk(i), v = g.length ? fn(g) : null; return { label: fmtHour(i * 3), full: fmtHour(i * 3) + '–' + fmtHour((i * 3 + 3) % 24), value: v, faded: g.length < 5, tip: fmtHour(i * 3) + '–' + fmtHour((i * 3 + 3) % 24) + '\n' + word + ' ' + (v == null ? '–' : fmt(v)) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : '') }; });
+  const effBlocks = tbar(effPct, v => Math.round(v) + '%', 'Effectiveness'), distBlocks = tbar(distPh, v => v.toFixed(1) + '/hr', 'Distractions');
+  const [bestE, worstE] = pickBest(effBlocks);
+  const PARTS = [['Morning', 5, 12], ['Afternoon', 12, 17], ['Evening', 17, 22], ['Night', 22, 29]], partOf = s => { const h = hourOf(s) < 5 ? hourOf(s) + 24 : hourOf(s); return PARTS.findIndex(p => h >= p[1] && h < p[2]); };
+  const crewGrid = `<div class="scrollx"><table class="tbl"><tr><th></th>${PARTS.map(p => `<th>${p[0]}</th>`).join('')}</tr>${crews.map(x => `<tr><td>${esc(x.p.name)}</td>${PARTS.map((p, i) => { const g = x.g.filter(s => partOf(s) === i); if (!g.length) return '<td class="muted">·</td>'; const v = effPct(g); return `<td class="c" style="background:${seqColor(v / 100.01)};color:${seqText(v / 100)};opacity:${g.length < 5 ? .55 : 1}" data-tip="${esc(x.p.name + ' · ' + p[0].toLowerCase() + '\nEffectiveness ' + Math.round(v) + '%\nFocus ' + f1(avg(g, s => s.focus)) + ' · output ' + f1(avg(g, s => s.output)) + '\n' + distPh(g).toFixed(1) + ' distractions/hr\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : ''))}">${Math.round(v)}%</td>`; }).join('')}</tr>`).join('')}</table></div>`;
+  // best and worst conditions, preferring combinations with enough sessions behind them
+  const combos = crews.filter(x => x.p.id).flatMap(x => PARTS.map((p, i) => ({ name: x.p.name + (p[0] === 'Night' ? ' at night' : ' in the ' + p[0].toLowerCase()), g: x.g.filter(s => partOf(s) === i) }))).filter(c => c.g.length).map(c => ({ ...c, v: effPct(c.g) }));
+  const rank = (arr, min) => { const ok = arr.filter(c => c.g.length >= min); return (ok.length >= 2 ? ok : arr).slice().sort((a, b) => b.v - a.v); };
+  const pr = rank(crews.filter(x => x.p.id).map(x => ({ name: x.p.name, g: x.g, v: effPct(x.g) })), 3), cr = rank(combos, 3);
+  const calm = crews.filter(x => x.p.id && x.g.length >= 3).map(x => ({ name: x.p.name, g: x.g, v: distPh(x.g) })).sort((a, b) => a.v - b.v)[0];
+  const line = (icon, label, c, val) => c ? `<div class="list-row"><span class="tile">${ic(icon, 17)}</span><div class="grow">${label}<div class="small muted">${c.g ? c.g.length + ' sessions' + (c.g.length < 5 ? ' · low sample' : '') : ''}</div></div><b style="text-align:right">${esc(c.name)}<div class="small muted" style="font-weight:400">${val}</div></b></div>` : '';
+  const best = `<div class="card"><h2>${ic('trophy', 17)}When you work best<small>Effectiveness = share of your time that was focused and productive</small></h2>
+    ${line('people', 'Best company', pr[0], pr[0] ? Math.round(pr[0].v) + '% effective' : '')}
+    ${line('sun', 'Best time of day', bestE && { name: bestE.full }, bestE ? Math.round(bestE.value) + '% effective' : '')}
+    ${line('spark', 'Best combination', cr[0], cr[0] ? Math.round(cr[0].v) + '% effective' : '')}
+    ${cr.length > 1 ? line('alert', 'Worst combination', cr[cr.length - 1], Math.round(cr[cr.length - 1].v) + '% effective') : ''}
+    ${line('bolt', 'Fewest distractions', calm, calm ? calm.v.toFixed(1) + ' per hour' : '')}
+    ${anyCrew ? '' : '<div class="cap">Pick who you are studying with when you start a session and this will also show which company works best.</div>'}</div>`;
+  const where = `${best}
+  <div class="card"><h2>${ic('people', 17)}By who you study with</h2><div class="chips" style="margin-bottom:12px">${Object.entries(PLM).map(([k, m]) => `<button class="chip sm ${ui.pm === k ? 'on' : ''}" data-a="set" data-keep data-path="pm" data-v="${k}">${m.label}</button>`).join('')}</div>${anyCrew ? placeBars : '<div class="muted small">No sessions with a group set in this range yet.</div>'}</div>
+  ${anyCrew ? `<div class="card"><h2>${ic('grid', 17)}Group × time of day<small>Effectiveness · faded = fewer than 5 sessions · tap a cell</small></h2>${crewGrid}</div>` : ''}
+  <div class="card"><h2>${ic('trend', 17)}Effectiveness by time of day</h2>${vBars(effBlocks, { max: 100, fmt: v => Math.round(v) + '%' })}${bestE ? `<div class="cap">Best: <b>${bestE.full}</b> (${Math.round(bestE.value)}%)${worstE && worstE !== bestE ? ` · Worst: <b>${worstE.full}</b> (${Math.round(worstE.value)}%)` : ''}</div>` : ''}</div>
+  <div class="card"><h2>${ic('bolt', 17)}Distractions by time of day<small>Per hour of work · lower is better</small></h2>${vBars(distBlocks, { fmt: v => v.toFixed(1) })}</div>`;
+  return where + `<div class="card"><h2>${ic('sun', 17)}Focus by time of day</h2>${vBars(blocks, { max: 5, fmt: v => v.toFixed(1) })}${bt ? `<div class="cap">Best: <b>${bt.full}</b> (${bt.value.toFixed(2)})${wt && wt !== bt ? ` · Worst: <b>${wt.full}</b> (${wt.value.toFixed(2)})` : ''}</div>` : ''}${blocks.some(x => x.faded && x.value != null) ? faded : ''}</div>
   <div class="card"><h2>${ic('calendar', 17)}Focus by weekday</h2>${vBars(wdays, { max: 5, fmt: v => v.toFixed(1) })}${bd ? `<div class="cap">Best day: <b>${bd.label}</b> (${bd.value.toFixed(2)})</div>` : ''}</div>
   <div class="card"><h2>${ic('grid', 17)}Hour × day<small>Avg focus for every hour you have studied</small></h2><svg class="chart" viewBox="0 0 ${L + 24 * cellW} ${T + 7 * cellH}">${hm}</svg>
     <div class="legend"><span>Focus</span>${SEQ.map((c, i) => `<span><i style="background:${c}"></i>${i + 1}${i < 4 ? '–' + (i + 2) : ''}</span>`).join('')}</div></div>
@@ -782,7 +819,7 @@ function histList() {
     if (dk !== lastDay) { out += `<div class="dayh"><span>${fmtDate(s.start)}</span><span>${fmtDur(dayTot[dk])}</span></div>`; lastDay = dk; }
     out += `<button class="sess" style="--c:${sb.color}" data-a="editSession" data-v="${s.id}">
       <div class="top"><b>${esc(sb.name)}${ty.name ? ` <span class="muted" style="font-weight:400">· ${esc(ty.name)}</span>` : ''}</b><b class="dur">${fmtDur(effMin(s))}</b></div>
-      <div class="meta">${fmtTime(s.start)}–${fmtTime(s.end)}${s.task ? ' · ' + esc(s.task) : ''}</div>
+      <div class="meta">${fmtTime(s.start)}–${fmtTime(s.end)}${crew(s.crewId).name ? ' · ' + esc(crew(s.crewId).name) : ''}${s.task ? ' · ' + esc(s.task) : ''}</div>
       <div class="sline"><span>Focus ${pips(Math.round(s.focus))}</span><span>Output ${pips(s.output)}</span>${s.distractions ? `<span>${ic('bolt', 13)}${s.distractions}</span>` : ''}${s.pausedMs >= 60000 ? `<span>${ic('cup', 13)}${Math.round(s.pausedMs / 60000)}m</span>` : ''}</div>
       ${tagIds(s).length ? `<div class="tags">${tagPills(s)}</div>` : ''}${s.note ? `<div class="note">${esc(s.note)}</div>` : ''}</button>`;
   }
@@ -798,7 +835,7 @@ function viewHistory() {
 
 /* ================= SETTINGS ================= */
 // iOS-style: a grouped list on the root page, each row drills into its own page.
-const SET_PAGES = { sync: 'Sync across devices', theme: 'Theme', subjects: 'Subjects', types: 'Types of work', tags: 'Boosters', goals: 'Goals', backup: 'Backup & export', pin: 'PIN lock', demo: 'Demo data' };
+const SET_PAGES = { sync: 'Sync across devices', theme: 'Theme', subjects: 'Subjects', types: 'Types of work', crews: 'Study groups', tags: 'Boosters', goals: 'Goals', backup: 'Backup & export', pin: 'PIN lock', demo: 'Demo data' };
 const irow = (label, { value = '', a = '', attrs = '', left = '', cls = '', chev = true } = {}) => `<button class="irow ${cls}" ${a ? `data-a="${a}"` : ''} ${attrs}>${left}<span class="grow">${label}</span>${value !== '' ? `<span class="ival">${value}</span>` : ''}${chev ? '<span class="chev">›</span>' : ''}</button>`;
 const igroup = (head, rows, foot = '') => `${head ? `<span class="ihead">${head}</span>` : ''}<div class="ilist">${rows}</div>${foot ? `<div class="ifoot">${foot}</div>` : ''}`;
 const tile = (icon, cls = '') => `<span class="tile ${cls}">${ic(icon, 17)}</span>`;
@@ -812,7 +849,7 @@ function viewSettings() {
     <div class="profile"><svg viewBox="0 0 64 64" width="56" height="56"><circle cx="32" cy="32" r="26" fill="none" stroke="var(--card2)" stroke-width="5"/><circle cx="32" cy="32" r="26" fill="none" stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-dasharray="118 164" transform="rotate(-90 32 32)"/><path d="M25 39v-6M32 39V25M39 39v-9" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/></svg>
       <div><b>Focus Log</b><span>${db.sessions.length} sessions · ${fmtH(tot)} logged${first ? ' · since ' + fmtShort(first) : ''}</span></div></div>
     ${igroup('Appearance', irow('Theme', { ...nav('theme', 'palette'), value: THEMES[st.theme]?.name || 'Coffee' }))}
-    ${igroup('Tracking', irow('Subjects', { ...nav('subjects', 'book'), value: db.subjects.length }) + irow('Types of work', { ...nav('types', 'layers'), value: db.types.length }) + irow('Boosters', { ...nav('tags', 'spark'), value: db.tags.length }) + irow('Goals', { ...nav('goals', 'target'), value: g.daily ? g.daily + 'h a day' : 'Off' }))}
+    ${igroup('Tracking', irow('Subjects', { ...nav('subjects', 'book'), value: db.subjects.length }) + irow('Types of work', { ...nav('types', 'layers'), value: db.types.length }) + irow('Study groups', { ...nav('crews', 'people'), value: db.crews.length }) + irow('Boosters', { ...nav('tags', 'spark'), value: db.tags.length }) + irow('Goals', { ...nav('goals', 'target'), value: g.daily ? g.daily + 'h a day' : 'Off' }))}
     ${igroup('Privacy', irow('PIN lock', { ...nav('pin', 'lock'), value: st.pin ? 'On' : 'Off' }))}
     ${igroup('Data', irow('Backup & export', nav('backup', 'download')) + irow('Demo data', { ...nav('demo', 'flask'), value: demoN || '' }))}
     ${igroup('Devices', irow('Sync across devices', { ...nav('sync', 'cloud'), value: !sync ? 'Off' : sync.err ? 'Problem' : 'On' }))}
@@ -830,8 +867,8 @@ function viewSettings() {
       + `<button class="btn primary block" style="margin-top:20px" data-a="syncConnect">${ic('cloud', 18)}Connect and sync</button>`;
   }
   if (p === 'theme') return head + igroup('', Object.entries(THEMES).map(([k, t]) => irow(t.name, { a: 'setTheme', attrs: `data-v="${k}"`, chev: false, value: (st.theme || 'coffee') === k ? '<span class="tick">✓</span>' : '', left: `<i class="sw" style="background:linear-gradient(135deg, ${t.bg} 50%, ${t.acc} 50%)"></i>` })).join(''));
-  if (p === 'subjects' || p === 'types' || p === 'tags') {
-    const foot = { subjects: 'Tap one to rename it, change its colour, set its own daily or weekly goal, or delete it.', types: 'The kind of work a session is: studying, an assignment, a personal project, club work.', tags: 'Things you used during a session. Stats compare your sessions with and without each one.' }[p];
+  if (p === 'subjects' || p === 'types' || p === 'tags' || p === 'crews') {
+    const foot = { crews: 'Who you study with. Stats compare how effective you are with each group and on your own.', subjects: 'Tap one to rename it, change its colour, set its own daily or weekly goal, or delete it.', types: 'The kind of work a session is: studying, an assignment, a personal project, club work.', tags: 'Things you used during a session. Stats compare your sessions with and without each one.' }[p];
     return head + igroup('', db[p].map(x => { const sg = p === 'subjects' && g.subjects[x.id] || {}; return irow(esc(x.name), { a: 'editItem', attrs: `data-coll="${p}" data-v="${x.id}"`, left: `<span class="dot" style="background:${x.color}"></span>`, value: sg.weekly ? sg.weekly + 'h a week' : sg.daily ? sg.daily + 'h a day' : '' }); }).join('') + irow('Add new', { a: 'editItem', attrs: `data-coll="${p}" data-v=""`, cls: 'accent', chev: false, left: ic('plus', 17) }), foot);
   }
   const num = (label, path, val, step = '0.5', icon = 'target') => `<label class="irow">${tile(icon)}<span class="grow">${label}</span><input type="number" inputmode="decimal" step="${step}" min="0" data-d="${path}" value="${val || ''}" placeholder="Off"></label>`;
@@ -855,6 +892,7 @@ function modalSession(d) {
   return `<div class="row between"><h1 style="font-size:22px">${d.id ? 'Edit session' : 'Add session'}</h1><button class="btn ghost" data-a="closeModal" data-force>Close</button></div>
   <span class="lbl">Subject</span>${pick(db.subjects, 'modal.data.subjectId', d.subjectId)}
   <span class="lbl">Type</span>${pick(db.types, 'modal.data.typeId', d.typeId)}
+  ${db.crews.length ? `<span class="lbl">Studying with</span><div class="chips">${db.crews.map(x => `<button class="chip ${d.crewId === x.id ? 'on' : ''}" style="--c:${x.color}" data-a="set" data-path="modal.data.crewId" data-v="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>` : ''}
   <input type="text" style="margin-top:10px" placeholder="Working on… (optional)" data-m="modal.data.task" value="${esc(d.task)}">
   <span class="lbl">Started</span><input type="datetime-local" data-m="modal.data.date" value="${esc(d.date)}">
   <div class="row" style="margin-top:10px"><div class="grow"><span class="lbl" style="margin-top:0">Study minutes</span><input type="number" inputmode="numeric" min="1" data-m="modal.data.dur" value="${esc(d.dur)}"></div>
@@ -873,7 +911,7 @@ function modalSession(d) {
   ${d.id ? `<button class="btn danger block" style="margin-top:10px" data-a="deleteSession">Delete session</button>` : ''}`;
 }
 function modalItem(d) {
-  const names = { subjects: 'subject', types: 'type', tags: 'booster' }, n = names[ui.modal.coll];
+  const names = { subjects: 'subject', types: 'type', tags: 'booster', crews: 'group' }, n = names[ui.modal.coll];
   return `<div class="row between"><h1 style="font-size:22px">${d.id ? 'Edit' : 'New'} ${n}</h1><button class="btn ghost" data-a="closeModal" data-force>Close</button></div>
   <span class="lbl">Name</span><input type="text" maxlength="30" data-m="modal.data.name" value="${esc(d.name)}" placeholder="Name">
   <span class="lbl">Color</span><div class="swatches">${PALETTE.map(c => `<button style="background:${c}" class="${d.color === c ? 'on' : ''}" data-a="set" data-keep data-path="modal.data.color" data-v="${c}" aria-label="${c}"></button>`).join('')}</div>
@@ -910,8 +948,8 @@ function modalPin(d) {
   <button class="btn primary block" style="margin-top:16px" data-a="savePin">Save PIN</button>`;
 }
 function sessionForm(s) {
-  if (!s) return { id: null, subjectId: ui.start.subjectId, typeId: ui.start.typeId, task: '', date: localISO(Date.now() - 3600e3), dur: 50, paused: '', distractions: 0, tags: {}, focus: 0, output: 0, sleep: '', energy: 0, mood: 0, note: '' };
-  return { id: s.id, subjectId: s.subjectId, typeId: s.typeId || '', task: s.task || '', date: localISO(s.start), dur: Math.round(effMin(s)), paused: Math.round((s.pausedMs || 0) / 60000) || '', distractions: s.distractions || 0, tags: Object.fromEntries(s.tags.map(t => [t.id, t.at || 0])), focus: s.focusSelf || 0, output: s.output, sleep: s.sleep ?? '', energy: s.energy || 0, mood: s.mood || 0, note: s.note || '' };
+  if (!s) return { id: null, subjectId: ui.start.subjectId, typeId: ui.start.typeId, crewId: '', task: '', date: localISO(Date.now() - 3600e3), dur: 50, paused: '', distractions: 0, tags: {}, focus: 0, output: 0, sleep: '', energy: 0, mood: 0, note: '' };
+  return { id: s.id, subjectId: s.subjectId, typeId: s.typeId || '', crewId: s.crewId || '', task: s.task || '', date: localISO(s.start), dur: Math.round(effMin(s)), paused: Math.round((s.pausedMs || 0) / 60000) || '', distractions: s.distractions || 0, tags: Object.fromEntries(s.tags.map(t => [t.id, t.at || 0])), focus: s.focusSelf || 0, output: s.output, sleep: s.sleep ?? '', energy: s.energy || 0, mood: s.mood || 0, note: s.note || '' };
 }
 // A day's sleep can be several blocks (3:30–8:00, then 10:00–12:00) or none at all (all-nighter).
 const ckBlocks = c => !c ? [] : Array.isArray(c.blocks) ? c.blocks : c.bed && c.wake ? [{ bed: c.bed, wake: c.wake }] : []; // older check-ins had one bed/wake pair
@@ -964,8 +1002,8 @@ async function download(name, text, mime) {
 }
 function toCSV() {
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-  const head = ['date', 'start', 'end', 'subject', 'type', 'task', 'effective_min', 'paused_min', 'breaks', 'boosters', 'booster_added_at_min', 'distractions', 'focus_score', 'focus_measured', 'focus_self', 'output', 'productivity_score', 'sleep_hrs', 'bedtime', 'wake', 'energy', 'mood', 'planned_min', 'note'];
-  const rows = [...db.sessions].sort((a, b) => a.start - b.start).map(s => [dayKey(s.start), fmtTime(s.start), fmtTime(s.end), subj(s.subjectId).name, typ(s.typeId).name, s.task, effMin(s).toFixed(1), ((s.pausedMs || 0) / 60000).toFixed(1), (s.pauses || []).map(p => (p.reason || 'Unspecified') + ' ' + ((p.end - p.start) / 60000).toFixed(1) + 'm').join(' | '),
+  const head = ['date', 'start', 'end', 'subject', 'type', 'studied_with', 'task', 'effective_min', 'paused_min', 'breaks', 'boosters', 'booster_added_at_min', 'distractions', 'focus_score', 'focus_measured', 'focus_self', 'output', 'productivity_score', 'sleep_hrs', 'bedtime', 'wake', 'energy', 'mood', 'planned_min', 'note'];
+  const rows = [...db.sessions].sort((a, b) => a.start - b.start).map(s => [dayKey(s.start), fmtTime(s.start), fmtTime(s.end), subj(s.subjectId).name, typ(s.typeId).name, crew(s.crewId).name, s.task, effMin(s).toFixed(1), ((s.pausedMs || 0) / 60000).toFixed(1), (s.pauses || []).map(p => (p.reason || 'Unspecified') + ' ' + ((p.end - p.start) / 60000).toFixed(1) + 'm').join(' | '),
     tagIds(s).map(id => tagById(id).name).join(' | '), s.tags.filter(t => tagById(t.id)).map(t => Math.round((t.at || 0) / 60000)).join(' | '), s.distractions || 0, s.focus, s.fa, s.focusSelf || '', s.output, score(s).toFixed(1), s.sleep, s.bed, s.wake, s.energy || '', s.mood || '', s.planned, s.note].map(q).join(','));
   return [head.join(','), ...rows].join('\n');
 }
@@ -992,11 +1030,12 @@ function seedDemo() {
     const night = nights[dayKey(start)] ||= (() => { const sl = Math.round((5 + R() * 4) * 2) / 2, b = Math.round((22 + R() * 4.5) * 4) / 4, hm = h => pad(Math.floor(h) % 24) + ':' + pad(Math.round(h % 1 * 60)); const r = R(); return r < .06 ? { sleep: 0, bed: null, wake: null, sb: 0, late: true } : { sleep: sl, bed: hm(b), wake: hm(b + sl), sb: r < .25 ? 2 : 1, late: b >= 25 }; })();
     const sleep = night.sleep, has = T.map((_, j) => R() < (prob[j] ?? .2));
     const tags = T.filter((_, j) => has[j]).map(t => ({ id: t.id, at: R() < .3 ? Math.round((8 + R() * 25)) * 60000 : 0 }));
+    const pi = Math.floor(R() * db.crews.length), pl = db.crews[pi], pEff = [.4, .3, -.6, -.2][pi] ?? 0;
     const len = Math.round(25 + R() * 70 + (has[1] ? 15 : 0)), paused = R() < .5 ? Math.round(R() * 8) * 60000 : 0;
     const fr = 2.6 + (sleep - 7) * .35 + (has[0] ? .6 : 0) + (has[1] ? .3 : 0) + (hour < 12 ? .4 : hour >= 21 ? -.5 : 0) - (len > 80 ? .4 : 0) - (night.late ? .4 : 0) + (R() - .5) * 1.6;
-    const focus = clamp(Math.round(fr), 1, 5), self = R() < .6 ? focus : null;
+    const focus = clamp(Math.round(fr + pEff), 1, 5), self = R() < .6 ? focus : null;
     db.sessions.push(setFocus({
-      id: uid() + i, u: Date.now(), demo: true, subjectId: db.subjects[Math.floor(R() * db.subjects.length)].id, typeId: db.types.length ? db.types[Math.floor(R() * R() * db.types.length)].id : '', task: '',
+      id: uid() + i, u: Date.now(), demo: true, subjectId: db.subjects[Math.floor(R() * db.subjects.length)].id, crewId: pl ? pl.id : '', typeId: db.types.length ? db.types[Math.floor(R() * R() * db.types.length)].id : '', task: '',
       start, end: start + len * 60000 + paused, pausedMs: paused, pauses: paused ? [{ start: start + 6e5, end: start + 6e5 + paused, reason: [...BREAKS, 'Other'][Math.floor(R() * 4)] }] : [], tags, distractions: Math.max(0, Math.round(4 - focus * .6 - (has[2] ? .8 : 0) + R() * 3)),
       focusSelf: self, fa: 0, output: clamp(Math.round(fr + (R() - .5) * 2), 1, 5), note: '', sleep, bed: night.bed, wake: night.wake, sb: night.sb, energy: clamp(Math.round(sleep - 4 + (R() - .5) * 2), 1, 5), mood: clamp(Math.round(3 + (R() - .5) * 3), 1, 5), planned: null
     }));
@@ -1011,7 +1050,7 @@ let sync = null; try { sync = JSON.parse(localStorage.getItem(SYNC_KEY)); } catc
 let syncing = false, syncT, syncAgain = false;
 function saveSync() { sync ? localStorage.setItem(SYNC_KEY, JSON.stringify(sync)) : localStorage.removeItem(SYNC_KEY); }
 // what gets shared: everything except this device's own bits (PIN, running timer, today's check-in)
-const syncDoc = () => ({ schema: SCHEMA, subjects: db.subjects, types: db.types, tags: db.tags, sessions: db.sessions, goals: db.goals, shared: { theme: db.settings.theme, neglectDays: db.settings.neglectDays }, deleted: db.deleted, checkins: db.checkins, metaU: db.metaU || 0 });
+const syncDoc = () => ({ schema: SCHEMA, subjects: db.subjects, types: db.types, tags: db.tags, crews: db.crews, sessions: db.sessions, goals: db.goals, shared: { theme: db.settings.theme, neglectDays: db.settings.neglectDays }, deleted: db.deleted, checkins: db.checkins, metaU: db.metaU || 0 });
 const b64e = str => { const b = new TextEncoder().encode(str); let o = ''; for (let i = 0; i < b.length; i += 0x8000) o += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(o); };
 const b64d = str => new TextDecoder().decode(Uint8Array.from(atob(str.replace(/\s/g, '')), c => c.charCodeAt(0)));
 const gh = (path, opt = {}) => fetch('https://api.github.com/repos/' + sync.repo + path, { cache: 'no-store', ...opt, headers: { Authorization: 'Bearer ' + sync.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opt.headers || {}) } });
@@ -1028,7 +1067,7 @@ async function pullRemote() {
 // Fold the remote copy into this device. Newest edit of each item wins; a deletion beats any older edit.
 function mergeRemote(r) {
   const before = JSON.stringify(syncDoc()), now = Date.now();
-  for (const coll of ['subjects', 'types', 'tags']) {
+  for (const coll of ['subjects', 'types', 'tags', 'crews']) {
     const rem = Array.isArray(r[coll]) ? r[coll] : [], remap = {};
     // two devices each start with their own "Math": same name, different id → keep the remote one, repoint local sessions
     for (const ri of rem) { const li = db[coll].find(x => x.id !== ri.id && !rem.some(y => y.id === x.id) && x.name.trim().toLowerCase() === String(ri.name).trim().toLowerCase()); if (li) remap[li.id] = ri.id; }
@@ -1038,6 +1077,7 @@ function mergeRemote(r) {
         if (!s) continue; let hit = false;
         if (coll === 'subjects' && remap[s.subjectId]) { s.subjectId = remap[s.subjectId]; hit = true; }
         if (coll === 'types' && remap[s.typeId]) { s.typeId = remap[s.typeId]; hit = true; }
+        if (coll === 'crews' && remap[s.crewId]) { s.crewId = remap[s.crewId]; hit = true; }
         if (coll === 'tags') s.tags.forEach(t => { if (remap[t.id]) { t.id = remap[t.id]; hit = true; } });
         if (hit && s !== db.active) s.u = now;
       }
@@ -1054,7 +1094,7 @@ function mergeRemote(r) {
   for (const [id, ts] of Object.entries(r.deleted || {})) db.deleted[id] = Math.max(db.deleted[id] || 0, ts);
   const gone = x => (db.deleted[x.id] || 0) >= (x.u || 1);
   db.sessions = db.sessions.filter(x => !gone(x));
-  for (const coll of ['subjects', 'types', 'tags']) db[coll] = db[coll].filter(x => !gone(x));
+  for (const coll of ['subjects', 'types', 'tags', 'crews']) db[coll] = db[coll].filter(x => !gone(x));
   for (const s of [...db.sessions, db.active]) if (s) s.tags = s.tags.filter(t => tagById(t.id));
   if ((r.metaU || 0) > (db.metaU || 0)) { // goals and theme travel together, newest wins
     if (r.goals) { db.goals = r.goals; db.goals.subjects ||= {}; }
@@ -1131,8 +1171,8 @@ const A = {
   backHome() { ui.setup = false; render(); animate('back'); },
   start() {
     const s = ui.start; if (!s.subjectId) return toast('Pick a subject');
-    db.active = { subjectId: s.subjectId, typeId: s.typeId, task: s.task.trim(), start: Date.now(), pausedMs: 0, pauseStart: null, tags: db.tags.filter(t => s.tags[t.id]).map(t => ({ id: t.id, at: 0 })), distractions: 0, planned: +s.planned > 0 ? +s.planned : null, ...ckFields(db.checkins[ckDay()]), ending: false };
-    db.settings.lastSubject = s.subjectId; db.settings.lastType = s.typeId; ui.setup = false; ui.end = { focus: 0, output: 0, note: '' };
+    db.active = { subjectId: s.subjectId, typeId: s.typeId, crewId: s.crewId || '', task: s.task.trim(), start: Date.now(), pausedMs: 0, pauseStart: null, tags: db.tags.filter(t => s.tags[t.id]).map(t => ({ id: t.id, at: 0 })), distractions: 0, planned: +s.planned > 0 ? +s.planned : null, ...ckFields(db.checkins[ckDay()]), ending: false };
+    db.settings.lastSubject = s.subjectId; db.settings.lastType = s.typeId; db.settings.lastCrew = s.crewId || null; ui.setup = false; ui.end = { focus: 0, output: 0, note: '' };
     save(); render(); animate();
   },
   // pausing stops the clock straight away, then asks why; each break is logged with its reason and length
@@ -1155,7 +1195,7 @@ const A = {
   backToTimer() { const a = db.active, now = Date.now(); a.ending = false; if (a.endPause) { const gap = now - a.pauseStart; a.start += gap; (a.pauses || []).forEach(p => { p.start += gap; if (p.end) p.end += gap; }); a.pauseStart = null; } save(); render(); animate(); },
   saveActive() {
     const a = db.active, e = ui.end; if (!e.output) return toast('Rate your output first');
-    db.sessions.push(setFocus({ id: uid(), u: Date.now(), subjectId: a.subjectId, typeId: a.typeId, task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focusSelf: e.focus || null, fa: 0, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned }));
+    db.sessions.push(setFocus({ id: uid(), u: Date.now(), subjectId: a.subjectId, typeId: a.typeId, crewId: a.crewId || '', task: a.task, start: a.start, end: a.pauseStart, pausedMs: a.pausedMs, tags: a.tags, pauses: (a.pauses || []).filter(p => p.end), distractions: a.distractions, focusSelf: e.focus || null, fa: 0, output: e.output, note: e.note.trim(), sleep: a.sleep, bed: a.bed, wake: a.wake, energy: a.energy, mood: a.mood, planned: a.planned }));
     db.active = null; save(); freshStart(); render(); animate(); toast('Session saved');
   },
   discard() { ask('Discard this session? It will not be saved.', () => { db.active = null; save(); freshStart(); render(); animate(); }, 'Discard'); },
@@ -1171,7 +1211,7 @@ const A = {
     if (!d.output) return toast('Rate your output');
     const paused = Math.max(0, parseFloat(d.paused) || 0) * 60000, old = db.sessions.find(s => s.id === d.id);
     const s = Object.assign(old || { id: uid() }, {
-      u: Date.now(), subjectId: d.subjectId, typeId: d.typeId, task: d.task.trim(), start, end: start + dur * 60000 + paused, pausedMs: paused,
+      u: Date.now(), subjectId: d.subjectId, typeId: d.typeId, crewId: d.crewId || '', task: d.task.trim(), start, end: start + dur * 60000 + paused, pausedMs: paused,
       tags: db.tags.filter(t => d.tags[t.id] != null).map(t => ({ id: t.id, at: d.tags[t.id] === 'mid' ? Math.max(MID_MS, Math.round(dur * 30000)) : d.tags[t.id] })),
       distractions: Math.max(0, parseInt(d.distractions) || 0), focusSelf: d.focus || null, fa: 0, output: d.output, note: d.note.trim(), sleep: numOrNull(d.sleep), energy: d.energy || null, mood: d.mood || null
     });
@@ -1196,7 +1236,7 @@ const A = {
     save(); ui.modal = null; freshStart(); render();
   },
   deleteItem() {
-    const { coll, data: d } = ui.modal, n = db.sessions.filter(s => coll === 'subjects' ? s.subjectId === d.id : coll === 'types' ? s.typeId === d.id : s.tags.some(t => t.id === d.id)).length;
+    const { coll, data: d } = ui.modal, n = db.sessions.filter(s => coll === 'subjects' ? s.subjectId === d.id : coll === 'types' ? s.typeId === d.id : coll === 'crews' ? s.crewId === d.id : s.tags.some(t => t.id === d.id)).length;
     ask(`Delete “${d.name}”?` + (n ? ` ${n} session${n === 1 ? '' : 's'} use it — they are kept, just without this label.` : ''), () => {
     db[coll] = db[coll].filter(i => i.id !== d.id); db.deleted[d.id] = Date.now();
     if (coll === 'tags') { db.sessions.forEach(s => { if (s.tags.some(t => t.id === d.id)) { s.tags = s.tags.filter(t => t.id !== d.id); s.u = Date.now(); } }); if (db.active) db.active.tags = db.active.tags.filter(t => t.id !== d.id); }
