@@ -731,7 +731,7 @@ function statsSleep(list) {
   const days = {};
   [...list].sort((x, y) => x.start - y.start).forEach(s => { const d = days[dayKey(s.start)] ||= { min: 0, score: 0, f: 0, o: 0, n: 0, sleep: null, bed: null }; d.min += effMin(s); d.score += score(s); d.f += s.focus; d.o += s.output; d.n++; if (d.sleep == null && has(s)) { d.sleep = +s.sleep; d.bed = s.bed || null; d.sb = s.sb ?? 1; d.energy = s.energy || null; } });
   const nights = Object.values(days).filter(d => d.sleep != null);
-  const SB = [[0, 0.01, 'None'], [0.01, 6, '<6h'], [6, 7, '6–7h'], [7, 8, '7–8h'], [8, 9, '8–9h'], [9, 99, '9h+']];
+  const SB = [[0, 0.01, 'None'], [0.01, 4, '<4h'], [4, 5, '4–5h'], [5, 6, '5–6h'], [6, 7, '6–7h'], [7, 8, '7–8h'], [8, 9, '8–9h'], [9, 99, '9h+']];
   // how the sleep was taken: not at all, in one go, or split into blocks
   const PAT = [['No sleep', d => d.sleep === 0], ['One block', d => d.sleep > 0 && (d.sb || 1) < 2], ['Split sleep', d => d.sleep > 0 && d.sb >= 2]];
   const pg = PAT.map(([, test]) => nights.filter(test)), en = g => g.filter(d => d.energy);

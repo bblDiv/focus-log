@@ -1,5 +1,5 @@
 // Offline support. Bump CACHE whenever a file changes.
-const CACHE = 'focuslog-v17';
+const CACHE = 'focuslog-v18';
 const ASSETS = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
