@@ -791,11 +791,12 @@ function statsSleep(list) {
   const strength = r => { const q = Math.abs(r); return q < 0.2 ? 'no clear link' : (q < 0.4 ? 'a weak' : q < 0.6 ? 'a moderate' : 'a strong') + (r > 0 ? ' positive' : ' negative') + ' link'; };
   // bedtime: hours after noon, so 1am sorts after 11pm
   const bedH = b => { const h = +b.slice(0, 2) + +b.slice(3) / 60; return h < 12 ? h + 24 : h; };
-  const BB = [[0, 23, 'Before 11'], [23, 24, '11–12'], [24, 25, '12–1am'], [25, 26, '1–2am'], [26, 99, 'After 2']];
+  // hours counted from noon, so 24 = midnight, 27 = 3am, 32 = 8am; one bar per hour through the small hours
+  const BB = [[0, 24, '<12am', 'before midnight'], [24, 25, '12–1', '12–1am'], [25, 26, '1–2', '1–2am'], [26, 27, '2–3', '2–3am'], [27, 28, '3–4', '3–4am'], [28, 29, '4–5', '4–5am'], [29, 32, '5–8', '5–8am'], [32, 99, '8am+', 'after 8am']];
   const bedS = sl.filter(s => s.bed), bedN = nights.filter(d => d.bed);
   const bg = BB.map(([lo, hi]) => bedS.filter(s => bedH(s.bed) >= lo && bedH(s.bed) < hi));
   const bedSeries = [{ name: 'Focus', color: PALETTE[0], values: bg.map(g => avg(g, s => s.focus)), ns: bg.map(g => g.length) }, { name: 'Output', color: PALETTE[1], values: bg.map(g => avg(g, s => s.output)), ns: bg.map(g => g.length) }];
-  const bedHours = BB.map(([lo, hi, l]) => { const g = bedN.filter(d => bedH(d.bed) >= lo && bedH(d.bed) < hi); return { label: l, value: g.length ? avg(g, d => d.min / 60) : null, faded: g.length < 5, tip: 'In bed ' + l + '\n' + (g.length ? avg(g, d => d.min / 60).toFixed(1) + 'h studied next day' : '–') + '\n' + g.length + ' days' }; });
+  const bedHours = BB.map(([lo, hi, l, full]) => { const g = bedN.filter(d => bedH(d.bed) >= lo && bedH(d.bed) < hi); return { label: l, value: g.length ? avg(g, d => d.min / 60) : null, faded: g.length < 5, tip: 'In bed ' + full + '\n' + (g.length ? avg(g, d => d.min / 60).toFixed(1) + 'h studied next day' : '–') + '\n' + g.length + ' days' }; });
   const avgBed = bedN.length ? avg(bedN, d => bedH(d.bed)) : null, clock = h => { const m = Math.round(h * 60) % 1440, hh = Math.floor(m / 60); return (hh % 12 || 12) + ':' + pad(m % 60) + (hh < 12 ? 'am' : 'pm'); };
   const kpi = (v, l) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`;
   const energy = bars(nights.filter(d => d.energy), 'sleep', d => d.energy, v => 'Energy ' + v.toFixed(2), 'days');
@@ -807,7 +808,7 @@ function statsSleep(list) {
   <div class="card"><h2>${ic('bolt', 17)}Energy by sleep<small>How you rated your energy after each amount of sleep, 1–5</small></h2>${energy.some(x => x.value != null) ? vBars(energy, { max: 5, fmt: v => v.toFixed(1) }) + cap(energy, v => v.toFixed(2), 'energy') : '<div class="muted small">Rate your energy in the check-in to see this.</div>'}</div>
   <div class="card"><h2>${ic('layers', 17)}How you slept<small>No sleep vs one block vs split into blocks</small></h2>${groupedBars(PAT.map(p => p[0]), patSeries)}${legend(patSeries)}<div class="cap">${patCap}</div></div>
   <div class="card"><h2>${ic('spark', 17)}Every session<small>Hours slept against focus</small></h2>${scatter(pts, 'Sleep (hrs)', ACC)}${reg ? `<div class="cap">r = ${reg.r.toFixed(2)}, ${strength(reg.r)}. Each extra hour of sleep ≈ <b>${reg.m >= 0 ? '+' : ''}${reg.m.toFixed(2)}</b> focus. ${smallN(pts.length)}</div>` : ''}</div>
-  ${bedS.length >= 3 ? `<div class="card"><h2>${ic('moon', 17)}Bedtime<small>Focus and output by when you went to bed</small></h2>${groupedBars(BB.map(b => b[2]), bedSeries)}${legend(bedSeries)}</div>
+  ${bedS.length >= 3 ? `<div class="card"><h2>${ic('moon', 17)}Bedtime<small>Focus and output by when you went to bed, from before midnight to after 8am</small></h2>${groupedBars(BB.map(b => b[2]), bedSeries)}${legend(bedSeries)}</div>
   <div class="card"><h2>${ic('moon', 17)}Bedtime and work done<small>Hours studied the next day</small></h2>${vBars(bedHours, { fmt: v => v.toFixed(1) + 'h' })}</div>` : `<div class="card"><h2>${ic('moon', 17)}Bedtime</h2><div class="muted small">Enter bed and wake times in the check-in on at least 3 sessions to see this.</div></div>`}`;
 }
 
