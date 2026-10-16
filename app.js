@@ -36,21 +36,34 @@ const uid = () => 'i' + Date.now().toString(36) + Math.random().toString(36).sli
 const pad = n => String(n).padStart(2, '0');
 const sum = a => a.reduce((x, y) => x + y, 0);
 const avg = (list, fn) => list.length ? sum(list.map(fn)) / list.length : null;
+// Focus and output are averaged by minutes, so a 5-hour session counts five times as much as a 1-hour one.
+const wavg = (list, fn) => { let m = 0, t = 0; for (const s of list) { const w = Math.max(1, effMin(s)); m += w; t += fn(s) * w; } return list.length ? t / m : null; };
+// Effectiveness pulled toward your overall level when there are few hours behind it (2 hours of "typical" added in),
+// so a short lucky stretch can't outrank a long solid one.
+const shrunkEff = (g, overall) => { const m = sum(g.map(effMin)), PRIOR = 120; return (sum(g.map(score)) + (overall || 0) / 100 * PRIOR) / (m + PRIOR) * 100; };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const startOfDay = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// A "day" runs from 6am to 6am, so a 2am session counts toward the evening before it
+// (daily totals, goals, streaks, the calendar and the sleep check-in all follow this).
+const DAY_H = 6;
+const startOfDay = t => { const d = new Date(t - DAY_H * 3600e3); d.setHours(DAY_H, 0, 0, 0); return d.getTime(); };
 const addDays = (t, n) => { const d = new Date(t); d.setDate(d.getDate() + n); return d.getTime(); };
 const weekStart = t => { const d = new Date(startOfDay(t)); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return d.getTime(); };
-const dayKey = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
-const dowIdx = t => (new Date(t).getDay() + 6) % 7;
+const calKey = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }; // the real calendar date
+const dayKey = t => { const d = new Date(t - DAY_H * 3600e3); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+const dowIdx = t => (new Date(startOfDay(t)).getDay() + 6) % 7;
 const fmtDate = t => new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtShort = t => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 const fmtTime = t => { const d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const TOD = [[6, 9], [9, 12], [12, 15], [15, 18], [18, 21], [21, 24], [24, 25], [25, 26], [26, 27], [27, 28], [28, 29], [29, 30]]; // 6am-based hours
+const todIdx = t => { const h = new Date(t).getHours(), x = h < DAY_H ? h + 24 : h; return TOD.findIndex(([a, b]) => x >= a && x < b); };
+const todShort = i => { const a = TOD[i][0] % 24; return (a % 12 || 12) + (a < 12 ? 'a' : 'p'); };
+const todFull = i => fmtHour(TOD[i][0] % 24) + '–' + fmtHour(TOD[i][1] % 24);
 const fmtHour = h => (h % 12 || 12) + (h < 12 ? 'am' : 'pm');
 const fmtH = min => (min / 60).toFixed(min >= 600 ? 0 : 1) + 'h';
 const fmtDur = min => { min = Math.round(min); return min >= 60 ? Math.floor(min / 60) + 'h ' + pad(min % 60) + 'm' : min + 'm'; };
 const fmtClock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); const h = Math.floor(s / 3600); return (h ? h + ':' + pad(Math.floor(s % 3600 / 60)) : Math.floor(s / 60)) + ':' + pad(s % 60); };
 const f1 = v => v == null ? '–' : v.toFixed(1);
-const localISO = t => dayKey(t) + 'T' + fmtTime(t);
+const localISO = t => calKey(t) + 'T' + fmtTime(t);
 const getPath = (o, p) => p.split('.').reduce((x, k) => x == null ? x : x[k], o);
 const setPath = (o, p, v) => { const ks = p.split('.'); const last = ks.pop(); ks.reduce((x, k) => x[k] ??= {}, o)[last] = v; };
 const hashPin = p => { let h = 5381; for (const c of 'fl|' + p) h = ((h << 5) + h + c.charCodeAt(0)) | 0; return String(h); };
@@ -142,8 +155,8 @@ function setFocus(s) {
   s.focus = s.focusSelf ? Math.round((0.6 * s.fa + 0.4 * s.focusSelf) * 10) / 10 : s.fa;
   return s;
 }
-// The check-in day rolls over at 4am, so a 1am session still belongs to the night before it.
-const ckDayOf = t => dayKey(t - 4 * 3600e3), ckDay = () => ckDayOf(Date.now());
+// The check-in day follows the 6am day boundary.
+const ckDayOf = t => dayKey(t), ckDay = () => ckDayOf(Date.now());
 const tagIds = s => s.tags.map(t => t.id).filter(tagById);
 
 db = load();
@@ -265,14 +278,14 @@ function animate(dir = '') {
 // One-line tips from your own last 30 days. Only claims with at least 3 sessions behind each side make the list.
 function insights() {
   const now = Date.now(), L = db.sessions.filter(s => s.start >= now - 30 * 864e5), out = [];
-  const eff = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(score)) / m * 100 : 0; };
+  const eff = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(score)) / m * 100 : 0; }, effS = g => shrunkEff(g, eff(L));
   if (L.length >= 3) {
-    const bl = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({ i, g: L.filter(s => Math.floor(new Date(s.start).getHours() / 3) === i) })).filter(x => x.g.length >= 3).sort((x, y) => eff(y.g) - eff(x.g));
-    if (bl.length >= 2) out.push(`Your sharpest window is <b>${fmtHour(bl[0].i * 3)}–${fmtHour((bl[0].i * 3 + 3) % 24)}</b>: ${Math.round(eff(bl[0].g))}% effective, against ${Math.round(eff(bl[bl.length - 1].g))}% at ${fmtHour(bl[bl.length - 1].i * 3)}.`);
-    const cr = db.crews.map(c => ({ c, g: L.filter(s => s.crewId === c.id) })).filter(x => x.g.length >= 3).sort((x, y) => eff(y.g) - eff(x.g));
+    const bl = TOD.map((_, i) => ({ i, g: L.filter(s => todIdx(s.start) === i) })).filter(x => x.g.length >= 3).sort((x, y) => effS(y.g) - effS(x.g));
+    if (bl.length >= 2) out.push(`Your sharpest window is <b>${todFull(bl[0].i)}</b>: ${Math.round(eff(bl[0].g))}% effective over ${fmtH(sum(bl[0].g.map(effMin)))}, against ${Math.round(eff(bl[bl.length - 1].g))}% at ${todFull(bl[bl.length - 1].i)}.`);
+    const cr = db.crews.map(c => ({ c, g: L.filter(s => s.crewId === c.id) })).filter(x => x.g.length >= 3).sort((x, y) => effS(y.g) - effS(x.g));
     if (cr.length >= 2) out.push(`You get the most done <b>${/^alone$/i.test(cr[0].c.name) ? 'on your own' : 'with ' + esc(cr[0].c.name)}</b> (${Math.round(eff(cr[0].g))}% effective), the least ${/^alone$/i.test(cr[cr.length - 1].c.name) ? 'on your own' : 'with ' + esc(cr[cr.length - 1].c.name)} (${Math.round(eff(cr[cr.length - 1].g))}%).`);
     const hi = L.filter(s => s.sleep >= 7), lo = L.filter(s => s.sleep != null && s.sleep < 6);
-    if (hi.length >= 3 && lo.length >= 3) out.push(`After 7h or more of sleep your focus averages <b>${f1(avg(hi, s => s.focus))}</b>, against ${f1(avg(lo, s => s.focus))} on under 6h.`);
+    if (hi.length >= 3 && lo.length >= 3) out.push(`After 7h or more of sleep your focus averages <b>${f1(wavg(hi, s => s.focus))}</b>, against ${f1(wavg(lo, s => s.focus))} on under 6h.`);
     const w1 = L.filter(s => s.start >= now - 7 * 864e5), w0 = L.filter(s => s.start < now - 7 * 864e5 && s.start >= now - 14 * 864e5), dph = g => sum(g.map(distOf)) / (sum(g.map(effMin)) / 60 || 1);
     if (w1.length >= 3 && w0.length >= 3) out.push(`Distractions this week: <b>${dph(w1).toFixed(1)} an hour</b>, ${dph(w1) <= dph(w0) ? 'down' : 'up'} from ${dph(w0).toFixed(1)} last week.`);
   }
@@ -380,7 +393,7 @@ function viewEnd(a) {
     <div class="livehead"><span class="dot" style="background:${sub.color}"></span><b>${esc(sub.name)}</b><span class="muted">· ${fmtTime(a.start)}–${fmtTime(a.pauseStart)}</span></div>
     <div class="sline" style="justify-content:center;margin-top:10px"><span>${ic('bolt', 14)}${a.distractions} distraction${a.distractions === 1 ? '' : 's'}</span>${br >= 1 ? `<span>${ic('cup', 14)}${Math.round(br)}m on break</span>` : ''}</div>
   </div>
-  ${(g => g.length >= 3 ? `<div class="sline" style="justify-content:center;margin:12px 0 -6px"><span>${deltaHTML(pctChange(fa, avg(g, s => s.focus)))} focus vs your 30-day average (${f1(avg(g, s => s.focus))})</span></div>` : '')(db.sessions.filter(s => s.start >= Date.now() - 30 * 864e5))}
+  ${(g => g.length >= 3 ? `<div class="sline" style="justify-content:center;margin:12px 0 -6px"><span>${deltaHTML(pctChange(fa, wavg(g, s => s.focus)))} focus vs your 30-day average (${f1(wavg(g, s => s.focus))})</span></div>` : '')(db.sessions.filter(s => s.start >= Date.now() - 30 * 864e5))}
   <div class="card fscore"><div><span class="eyebrow">Focus score</span><b>${f1(fa)}</b><span class="muted"> / 5</span></div><div class="small muted">${fp.dist} distraction${fp.dist === 1 ? '' : 's'}${fp.asDist ? ` (${a.distractions} tapped + ${fp.asDist} phone/other break${fp.asDist === 1 ? '' : 's'})` : ''} and ${Math.round(br)}m of breaks${br >= 1 ? `, ${Math.round(fp.weighted)}m of it counted` : ''}, over ${fmtDur(elapsedMs(a) / 60000)}.${e.focus ? ` With your rating: <b style="color:var(--text)">${f1(Math.round((0.6 * fa + 0.4 * e.focus) * 10) / 10)}</b>.` : ''}</div></div>
   <span class="lbl">${ic('target', 14)}Your own focus rating <em>· optional</em></span>${rate('end.focus', e.focus)}
   <span class="lbl">${ic('check', 14)}Output <em>· how much got done</em></span>${rate('end.output', e.output)}
@@ -421,7 +434,7 @@ function matchF(f) {
 function rangeBounds(f, list) {
   const now = Date.now(), first = list.length ? Math.min(...list.map(s => s.start)) : now;
   if (f.range === 'all') return [startOfDay(first), now];
-  if (f.range === 'custom') return [f.from ? new Date(f.from + 'T00:00').getTime() : startOfDay(first), f.to ? new Date(f.to + 'T23:59:59').getTime() : now];
+  if (f.range === 'custom') return [f.from ? startOfDay(new Date(f.from + 'T12:00').getTime()) : startOfDay(first), f.to ? addDays(startOfDay(new Date(f.to + 'T12:00').getTime()), 1) - 1 : now];
   return [addDays(startOfDay(now), -(parseInt(f.range) - 1)), now];
 }
 const pctChange = (cur, prev) => prev ? (cur - prev) / prev * 100 : null;
@@ -591,7 +604,7 @@ function statsOverview(list, base, a, b) {
   });
   // 7-day rolling averages use `base` so the window can reach back before the range start
   const rollH = [], rollF = [];
-  for (const d of days) { const w = base.filter(s => s.start >= addDays(d, -6) && s.start < addDays(d, 1)); rollH.push(sum(w.map(effMin)) / 60 / 7); rollF.push(avg(w, s => s.focus)); }
+  for (const d of days) { const w = base.filter(s => s.start >= addDays(d, -6) && s.start < addDays(d, 1)); rollH.push(sum(w.map(effMin)) / 60 / 7); rollF.push(wavg(w, s => s.focus)); }
   const now = Date.now(), D = 864e5, hrs = n => [minsBetween(base, now - n * D, now + 1), minsBetween(base, now - 2 * n * D, now - n * D)];
   const foc = n => [avg(base.filter(s => s.start >= now - n * D), s => s.focus), avg(base.filter(s => s.start >= now - 2 * n * D && s.start < now - n * D), s => s.focus)];
   const chg = (l, [cur, prv], f) => `<div class="list-row"><div class="grow">${l}<div class="small muted">${cur == null ? '–' : f(cur)} now · ${prv ? f(prv) : '–'} before</div></div><b>${deltaHTML(pctChange(cur || 0, prv))}</b></div>`;
@@ -599,7 +612,7 @@ function statsOverview(list, base, a, b) {
   return `<div class="hero"><div class="herorow">
     <div><span class="eyebrow">Time logged</span><div class="xl">${fmtH(mins)}</div><div class="small">${prev.length ? deltaHTML(pctChange(mins, pm)) + ' <span class="muted">vs previous period</span>' : `<span class="muted">${list.length} sessions</span>`}</div></div>
     <div style="text-align:right"><span class="eyebrow">Productivity score</span><div class="xl">${Math.round(sum(list.map(score)))}</div><div class="small muted">${f1(avg(list, score))} per session</div></div></div>${spark(bk.map(x => sum(x.parts.map(p => p.v))))}</div>
-  <div class="kpis">${kpi(list.length, 'Sessions')}${kpi(f1(avg(list, s => s.focus)), 'Avg focus')}${kpi(f1(avg(list, s => s.output)), 'Avg output')}${kpi(fmtDur(mins / list.length), 'Avg length')}${kpi(fmtH(deep), 'Deep work')}${kpi(f1(avg(list, distOf)), 'Distractions')}${kpi(st.cur + 'd', 'Streak')}${kpi(st.best + 'd', 'Best streak')}${kpi(fmtDur(sum(list.map(s => (s.pausedMs || 0) / 60000))), 'Break time')}</div>
+  <div class="kpis">${kpi(list.length, 'Sessions')}${kpi(f1(wavg(list, s => s.focus)), 'Avg focus')}${kpi(f1(wavg(list, s => s.output)), 'Avg output')}${kpi(fmtDur(mins / list.length), 'Avg length')}${kpi(fmtH(deep), 'Deep work')}${kpi(f1(avg(list, distOf)), 'Distractions')}${kpi(st.cur + 'd', 'Streak')}${kpi(st.best + 'd', 'Best streak')}${kpi(fmtDur(sum(list.map(s => (s.pausedMs || 0) / 60000))), 'Break time')}</div>
   <div class="card"><h2>${ic('chart', 17)}${weekly ? 'Hours per week' : 'Hours per day'}<small>Stacked by subject · tap a bar</small></h2>${stackedBars(bk)}${legend(used)}</div>
   <div class="card"><h2>${ic('pie', 17)}Where the time went</h2>${pie(used.map(sb => { const m = sum(list.filter(s => subj(s.subjectId).id === sb.id).map(effMin)); return { name: sb.name, color: sb.color, v: m, fmt: fmtH(m) }; }).sort((x, y) => y.v - x.v))}</div>
   <div class="card"><h2>${ic('trend', 17)}Hours per day<small>7-day rolling average</small></h2>${lineChart({ labels: dl, series: [{ name: 'Hours/day', color: ACC, values: rollH }], fmt: v => v.toFixed(2) + 'h', H: 140 })}</div>
@@ -627,8 +640,8 @@ function calendarHeat(base) {
 
 /* --- boosters --- */
 const METRICS = {
-  focus: { label: 'Focus', fn: s => s.focus, fmt: v => v.toFixed(2), good: 1, max: 5 },
-  output: { label: 'Output', fn: s => s.output, fmt: v => v.toFixed(2), good: 1, max: 5 },
+  focus: { label: 'Focus', fn: s => s.focus, fmt: v => v.toFixed(2), good: 1, max: 5, w: 1 },
+  output: { label: 'Output', fn: s => s.output, fmt: v => v.toFixed(2), good: 1, max: 5, w: 1 },
   len: { label: 'Length', fn: effMin, fmt: v => Math.round(v) + 'm', good: 1 },
   dist: { label: 'Distractions', fn: distOf, fmt: v => v.toFixed(1), good: -1 },
   score: { label: 'Score', fn: score, fmt: v => v.toFixed(1), good: 1 }
@@ -638,14 +651,14 @@ function grpName(k) { if (!k) return 'None'; const n = k.split('+').map(id => ta
 function statsBoosters(list, base, a, b) {
   const groups = new Map(); list.forEach(s => { const k = grpKey(s); (groups.get(k) || groups.set(k, []).get(k)).push(s); });
   const keys = [...groups.keys()].sort((x, y) => (x === '') ? -1 : (y === '') ? 1 : groups.get(y).length - groups.get(x).length);
-  const none = groups.get('') || [], baseOf = m => none.length ? avg(none, METRICS[m].fn) : null;
+  const mAvg = (g, M) => (M.w ? wavg : avg)(g, M.fn), none = groups.get('') || [], baseOf = m => none.length ? mAvg(none, METRICS[m]) : null;
   const MIX = [SEQ[4], SEQ[2], SEQ[1], SEQ[3]];
   let mi = 0; const gcol = {}; keys.forEach(k => gcol[k] = !k ? GREY : k.includes('+') ? MIX[mi++ % MIX.length] : tagById(k).color);
   const M = METRICS[ui.cmp], bs = baseOf(ui.cmp);
-  const bars = hBars(keys.map(k => { const g = groups.get(k), v = avg(g, M.fn); return { name: grpName(k), color: gcol[k], value: v, extra: !k ? '<span class="flat">baseline</span>' : bs != null ? deltaHTML(pctChange(v, bs), M.good) : '', tip: grpName(k) + '\n' + M.label + ': ' + M.fmt(v) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : '') }; }), M.fmt, M.max);
+  const bars = hBars(keys.map(k => { const g = groups.get(k), v = mAvg(g, M); return { name: grpName(k), color: gcol[k], value: v, extra: !k ? '<span class="flat">baseline</span>' : bs != null ? deltaHTML(pctChange(v, bs), M.good) : '', tip: grpName(k) + '\n' + M.label + ': ' + M.fmt(v) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : '') }; }), M.fmt, M.max);
   const table = `<div class="scrollx"><table class="tbl plain"><tr><th>Group</th><th>n</th>${Object.values(METRICS).map(m => `<th>${m.label}</th>`).join('')}</tr>${keys.map(k => {
     const g = groups.get(k);
-    return `<tr><td>${esc(grpName(k))} ${smallN(g.length)}</td><td>${g.length}</td>${Object.entries(METRICS).map(([m, X]) => { const v = avg(g, X.fn), b0 = baseOf(m); return `<td>${X.fmt(v)}${k && b0 != null ? `<small>${deltaHTML(pctChange(v, b0), X.good)}</small>` : ''}</td>`; }).join('')}</tr>`;
+    return `<tr><td>${esc(grpName(k))} ${smallN(g.length)}</td><td>${g.length}</td>${Object.entries(METRICS).map(([m, X]) => { const v = mAvg(g, X), b0 = baseOf(m); return `<td>${X.fmt(v)}${k && b0 != null ? `<small>${deltaHTML(pctChange(v, b0), X.good)}</small>` : ''}</td>`; }).join('')}</tr>`;
   }).join('')}</table></div>`;
   const top = keys.slice().sort((x, y) => groups.get(y).length - groups.get(x).length), rest = top.slice(5);
   const share = top.slice(0, 5).map(k => ({ name: grpName(k), color: gcol[k], v: groups.get(k).length, fmt: String(groups.get(k).length) }));
@@ -656,7 +669,7 @@ function statsBoosters(list, base, a, b) {
   const matrix = `<div class="scrollx"><table class="tbl"><tr><th></th>${cols.map(c => `<th>${esc(c.name)}</th>`).join('')}</tr>${subs.map(sb => `<tr><td>${esc(sb.name)}</td>${cols.map(c => {
     const g = list.filter(s => s.subjectId === sb.id && (c.id === 'none' ? !tagIds(s).length : tagIds(s).includes(c.id)));
     if (!g.length) return `<td class="muted">·</td>`;
-    const v = avg(g, s => s.focus);
+    const v = wavg(g, s => s.focus);
     return `<td class="c" style="background:${focusColor(v)};color:${seqText((v - 1) / 4)};opacity:${g.length < 5 ? .55 : 1}" data-tip="${esc(sb.name + ' × ' + c.name + '\nAvg focus ' + v.toFixed(2) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : ''))}">${v.toFixed(1)}</td>`;
   }).join('')}</tr>`).join('')}</table></div>`;
 
@@ -689,16 +702,18 @@ function statsPatterns(list, base, a, b) {
   let hm = '';
   for (let d = 0; d < 7; d++) {
     hm += `<text class="ax" x="0" y="${T + d * cellH + 12}">${DOW[d]}</text>`;
-    for (let h = 0; h < 24; h++) {
-      const g = grid[d + '-' + h], v = g ? avg(g, x => x.focus) : null;
-      hm += `<rect x="${L + h * cellW}" y="${T + d * cellH}" width="${cellW - 2}" height="${cellH - 2}" rx="2.5" fill="${g ? focusColor(v) : 'var(--card2)'}" ${g ? `data-tip="${esc(DOW[d] + ' ' + fmtHour(h) + '\nAvg focus ' + v.toFixed(2) + '\n' + g.length + ' session' + (g.length === 1 ? '' : 's'))}" style="cursor:pointer"` : ''}/>`;
+    for (let c = 0; c < 24; c++) {
+      const h = (c + DAY_H) % 24, g = grid[d + '-' + h], v = g ? wavg(g, x => x.focus) : null;
+      hm += `<rect x="${L + c * cellW}" y="${T + d * cellH}" width="${cellW - 2}" height="${cellH - 2}" rx="2.5" fill="${g ? focusColor(v) : 'var(--card2)'}" ${g ? `data-tip="${esc(DOW[d] + ' ' + fmtHour(h) + '\nAvg focus ' + v.toFixed(2) + '\n' + g.length + ' session' + (g.length === 1 ? '' : 's'))}" style="cursor:pointer"` : ''}/>`;
     }
   }
-  [0, 6, 12, 18, 23].forEach(h => hm += `<text class="ax" x="${L + h * cellW + cellW / 2 - 1}" y="8" text-anchor="middle">${fmtHour(h)}</text>`);
-  const fbar = (label, g, extra = '') => ({ label, full: label + extra, value: g.length ? avg(g, x => x.focus) : null, faded: g.length < 5, tip: label + extra + '\nAvg focus ' + f1(avg(g, x => x.focus)) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : '') });
-  const pickBest = items => { const ok = items.filter(i => i.value != null), solid = ok.filter(i => !i.faded), pool = solid.length >= 2 ? solid : ok; return pool.length ? [pool.reduce((m, i) => i.value > m.value ? i : m), pool.reduce((m, i) => i.value < m.value ? i : m)] : []; };
-  // 3-hour blocks keep enough sessions per bar to mean something
-  const blocks = [0, 1, 2, 3, 4, 5, 6, 7].map(i => fbar(fmtHour(i * 3), list.filter(s => Math.floor(new Date(s.start).getHours() / 3) === i), '–' + fmtHour((i * 3 + 3) % 24)));
+  [6, 12, 18, 0, 5].forEach(h => hm += `<text class="ax" x="${L + ((h - DAY_H + 24) % 24) * cellW + cellW / 2 - 1}" y="8" text-anchor="middle">${fmtHour(h)}</text>`);
+  const fbar = (label, g, extra = '') => ({ label, full: label + extra, value: g.length ? wavg(g, x => x.focus) : null, faded: g.length < 5, tip: label + extra + '\nAvg focus ' + f1(wavg(g, x => x.focus)) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : '') });
+  const pickBest = items => { const rv = i => i.rankV ?? i.value, ok = items.filter(i => i.value != null), solid = ok.filter(i => !i.faded), pool = solid.length >= 2 ? solid : ok; return pool.length ? [pool.reduce((m, i) => rv(i) > rv(m) ? i : m), pool.reduce((m, i) => rv(i) < rv(m) ? i : m)] : []; };
+  // 3-hour blocks through the day keep enough sessions per bar; from midnight to 6am it goes hour by hour
+  // best/worst ranks with hours taken into account: each slot's focus is pulled toward your overall focus by 2 hours' worth
+  const allF = wavg(list, x => x.focus), focusS = g => { const m = sum(g.map(effMin)); return (sum(g.map(x => x.focus * effMin(x))) + allF * 120) / (m + 120); };
+  const blocks = TOD.map((_, i) => { const g = list.filter(s => todIdx(s.start) === i); return Object.assign(fbar(todFull(i), g), { label: todShort(i), rankV: g.length ? focusS(g) : undefined }); });
   const [bt, wt] = pickBest(blocks);
   const wdays = DOW.map((d, i) => { const g = list.filter(s => dowIdx(s.start) === i), x = fbar(d, g); x.tip += '\n' + fmtH(sum(g.map(effMin))) + ' total'; return x; });
   const [bd] = pickBest(wdays);
@@ -711,32 +726,33 @@ function statsPatterns(list, base, a, b) {
   const lvl = key => {
     const gs = [1, 2, 3, 4, 5].map(n => list.filter(s => +s[key] === n));
     if (!gs.some(g => g.length)) return '<div class="muted small">No check-in data in this range.</div>';
-    const series = [{ name: 'Focus after', color: PALETTE[0], values: gs.map(g => avg(g, s => s.focus)), ns: gs.map(g => g.length) }, { name: 'Output after', color: PALETTE[1], values: gs.map(g => avg(g, s => s.output)), ns: gs.map(g => g.length) }];
+    const series = [{ name: 'Focus after', color: PALETTE[0], values: gs.map(g => wavg(g, s => s.focus)), ns: gs.map(g => g.length) }, { name: 'Output after', color: PALETTE[1], values: gs.map(g => wavg(g, s => s.output)), ns: gs.map(g => g.length) }];
     return groupedBars(['1', '2', '3', '4', '5'], series) + legend(series) + (gs.some(g => g.length && g.length < 5) ? `<div class="cap"><span class="warn">low sample</span> Some levels have fewer than 5 sessions.</div>` : '');
   };
   const faded = '<div class="cap muted">Faded bars have fewer than 5 sessions.</div>';
   // Effectiveness: how much of the clock turned into focused, productive work (score ÷ minutes), 0–100%.
   const effPct = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(score)) / m * 100 : null; };
   const distPh = g => { const m = sum(g.map(effMin)); return m ? sum(g.map(distOf)) / (m / 60) : null; };
-  const PLM = { eff: { label: 'Effectiveness', fn: effPct, fmt: v => Math.round(v) + '%', max: 100 }, focus: { label: 'Focus', fn: g => avg(g, s => s.focus), fmt: v => v.toFixed(2), max: 5 }, output: { label: 'Output', fn: g => avg(g, s => s.output), fmt: v => v.toFixed(2), max: 5 }, dist: { label: 'Distractions/hr', fn: distPh, fmt: v => v.toFixed(1) }, hours: { label: 'Hours', fn: g => sum(g.map(effMin)) / 60, fmt: v => v.toFixed(1) + 'h' } };
+  const PLM = { eff: { label: 'Effectiveness', fn: effPct, fmt: v => Math.round(v) + '%', max: 100 }, focus: { label: 'Focus', fn: g => wavg(g, s => s.focus), fmt: v => v.toFixed(2), max: 5 }, output: { label: 'Output', fn: g => wavg(g, s => s.output), fmt: v => v.toFixed(2), max: 5 }, dist: { label: 'Distractions/hr', fn: distPh, fmt: v => v.toFixed(1) }, hours: { label: 'Hours', fn: g => sum(g.map(effMin)) / 60, fmt: v => v.toFixed(1) + 'h' } };
   const crews = [...db.crews, { id: '', name: 'Not set', color: GREY }].map(p => ({ p, g: list.filter(s => crew(s.crewId).id === p.id) })).filter(x => x.g.length);
   const anyCrew = crews.some(x => x.p.id), M = PLM[ui.pm] || PLM.eff;
   const placeBars = hBars(crews.map(x => ({ name: x.p.name, color: x.p.color, value: M.fn(x.g), extra: x.g.length < 5 ? '<span class="warn">low sample</span>' : '', tip: x.p.name + '\n' + M.label + ': ' + M.fmt(M.fn(x.g)) + '\n' + x.g.length + ' sessions · ' + fmtH(sum(x.g.map(effMin))) })).sort((a, b) => (b.value || 0) - (a.value || 0)), M.fmt, M.max);
-  const hourOf = s => new Date(s.start).getHours(), blk = i => list.filter(s => Math.floor(hourOf(s) / 3) === i);
-  const tbar = (fn, fmt, word) => [0, 1, 2, 3, 4, 5, 6, 7].map(i => { const g = blk(i), v = g.length ? fn(g) : null; return { label: fmtHour(i * 3), full: fmtHour(i * 3) + '–' + fmtHour((i * 3 + 3) % 24), value: v, faded: g.length < 5, tip: fmtHour(i * 3) + '–' + fmtHour((i * 3 + 3) % 24) + '\n' + word + ' ' + (v == null ? '–' : fmt(v)) + '\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : '') }; });
-  const effBlocks = tbar(effPct, v => Math.round(v) + '%', 'Effectiveness'), distBlocks = tbar(distPh, v => v.toFixed(1) + '/hr', 'Distractions');
+  const hourOf = s => new Date(s.start).getHours(), blk = i => list.filter(s => todIdx(s.start) === i);
+  const tbar = (fn, fmt, word, rankFn) => TOD.map((_, i) => { const g = blk(i), v = g.length ? fn(g) : null; return { label: todShort(i), full: todFull(i), value: v, rankV: rankFn && g.length ? rankFn(g) : undefined, faded: g.length < 5, tip: todFull(i) + '\n' + word + ' ' + (v == null ? '–' : fmt(v)) + '\n' + g.length + ' sessions · ' + fmtH(sum(g.map(effMin))) + (g.length < 5 ? ' (small sample)' : '') }; });
+  const effBlocks = tbar(effPct, v => Math.round(v) + '%', 'Effectiveness', g => shrunkEff(g, effPct(list))), distBlocks = tbar(distPh, v => v.toFixed(1) + '/hr', 'Distractions');
   const [bestE, worstE] = pickBest(effBlocks);
-  const PARTS = [['Morning', 5, 12], ['Afternoon', 12, 17], ['Evening', 17, 22], ['Night', 22, 29]], partOf = s => { const h = hourOf(s) < 5 ? hourOf(s) + 24 : hourOf(s); return PARTS.findIndex(p => h >= p[1] && h < p[2]); };
-  const crewGrid = `<div class="scrollx"><table class="tbl"><tr><th></th>${PARTS.map(p => `<th>${p[0]}</th>`).join('')}</tr>${crews.map(x => `<tr><td>${esc(x.p.name)}</td>${PARTS.map((p, i) => { const g = x.g.filter(s => partOf(s) === i); if (!g.length) return '<td class="muted">·</td>'; const v = effPct(g); return `<td class="c" style="background:${seqColor(v / 100.01)};color:${seqText(v / 100)};opacity:${g.length < 5 ? .55 : 1}" data-tip="${esc(x.p.name + ' · ' + p[0].toLowerCase() + '\nEffectiveness ' + Math.round(v) + '%\nFocus ' + f1(avg(g, s => s.focus)) + ' · output ' + f1(avg(g, s => s.output)) + '\n' + distPh(g).toFixed(1) + ' distractions/hr\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : ''))}">${Math.round(v)}%</td>`; }).join('')}</tr>`).join('')}</table></div>`;
+  const PARTS = [['Morning', 6, 12, 'in the morning'], ['Afternoon', 12, 17, 'in the afternoon'], ['Evening', 17, 21, 'in the evening'], ['Late', 21, 25, 'late evening'], ['1–3am', 25, 27, 'from 1 to 3am'], ['3–6am', 27, 30, 'from 3 to 6am']], partOf = s => { const h = hourOf(s) < DAY_H ? hourOf(s) + 24 : hourOf(s); return PARTS.findIndex(p => h >= p[1] && h < p[2]); };
+  const crewGrid = `<div class="scrollx"><table class="tbl"><tr><th></th>${PARTS.map(p => `<th>${p[0]}</th>`).join('')}</tr>${crews.map(x => `<tr><td>${esc(x.p.name)}</td>${PARTS.map((p, i) => { const g = x.g.filter(s => partOf(s) === i); if (!g.length) return '<td class="muted">·</td>'; const v = effPct(g); return `<td class="c" style="background:${seqColor(v / 100.01)};color:${seqText(v / 100)};opacity:${g.length < 5 ? .55 : 1}" data-tip="${esc(x.p.name + ' · ' + p[0].toLowerCase() + '\nEffectiveness ' + Math.round(v) + '%\nFocus ' + f1(wavg(g, s => s.focus)) + ' · output ' + f1(wavg(g, s => s.output)) + '\n' + distPh(g).toFixed(1) + ' distractions/hr\n' + g.length + ' sessions' + (g.length < 5 ? ' (small sample)' : ''))}">${Math.round(v)}%</td>`; }).join('')}</tr>`).join('')}</table></div>`;
   // best and worst conditions, preferring combinations with enough sessions behind them
-  const combos = crews.filter(x => x.p.id).flatMap(x => PARTS.map((p, i) => ({ name: x.p.name + (p[0] === 'Night' ? ' at night' : ' in the ' + p[0].toLowerCase()), g: x.g.filter(s => partOf(s) === i) }))).filter(c => c.g.length).map(c => ({ ...c, v: effPct(c.g) }));
-  const rank = (arr, min) => { const ok = arr.filter(c => c.g.length >= min); return (ok.length >= 2 ? ok : arr).slice().sort((a, b) => b.v - a.v); };
+  const combos = crews.filter(x => x.p.id).flatMap(x => PARTS.map((p, i) => ({ name: x.p.name + ' ' + p[3], g: x.g.filter(s => partOf(s) === i) }))).filter(c => c.g.length).map(c => ({ ...c, v: effPct(c.g) }));
+  // ranked by time-aware effectiveness, so 5 hours at 4.9 beats 1 hour at 5.0
+  const allE = effPct(list), rank = (arr, min) => { const ok = arr.filter(c => c.g.length >= min); return (ok.length >= 2 ? ok : arr).slice().sort((a, b) => shrunkEff(b.g, allE) - shrunkEff(a.g, allE)); };
   const pr = rank(crews.filter(x => x.p.id).map(x => ({ name: x.p.name, g: x.g, v: effPct(x.g) })), 3), cr = rank(combos, 3);
   const calm = crews.filter(x => x.p.id && x.g.length >= 3).map(x => ({ name: x.p.name, g: x.g, v: distPh(x.g) })).sort((a, b) => a.v - b.v)[0];
-  const line = (icon, label, c, val) => c ? `<div class="list-row"><span class="tile">${ic(icon, 17)}</span><div class="grow">${label}<div class="small muted">${c.g ? c.g.length + ' sessions' + (c.g.length < 5 ? ' · low sample' : '') : ''}</div></div><b style="text-align:right">${esc(c.name)}<div class="small muted" style="font-weight:400">${val}</div></b></div>` : '';
-  const best = `<div class="card"><h2>${ic('trophy', 17)}When you work best<small>Effectiveness = share of your time that was focused and productive</small></h2>
+  const line = (icon, label, c, val) => c ? `<div class="list-row"><span class="tile">${ic(icon, 17)}</span><div class="grow">${label}<div class="small muted">${c.g ? c.g.length + ' sessions · ' + fmtH(sum(c.g.map(effMin))) + (c.g.length < 5 ? ' · low sample' : '') : ''}</div></div><b style="text-align:right">${esc(c.name)}<div class="small muted" style="font-weight:400">${val}</div></b></div>` : '';
+  const best = `<div class="card"><h2>${ic('trophy', 17)}When you work best<small>Effectiveness = share of your time that was focused and productive. Ranked with hours taken into account, so 5 hours at 4.9 beats 1 hour at 5.0.</small></h2>
     ${line('people', 'Best company', pr[0], pr[0] ? Math.round(pr[0].v) + '% effective' : '')}
-    ${line('sun', 'Best time of day', bestE && { name: bestE.full }, bestE ? Math.round(bestE.value) + '% effective' : '')}
+    ${line('sun', 'Best time of day', bestE && { name: bestE.full, g: blk(TOD.findIndex((_, i) => todFull(i) === bestE.full)) }, bestE ? Math.round(bestE.value) + '% effective' : '')}
     ${line('spark', 'Best combination', cr[0], cr[0] ? Math.round(cr[0].v) + '% effective' : '')}
     ${cr.length > 1 ? line('alert', 'Worst combination', cr[cr.length - 1], Math.round(cr[cr.length - 1].v) + '% effective') : ''}
     ${line('bolt', 'Fewest distractions', calm, calm ? calm.v.toFixed(1) + ' per hour' : '')}
@@ -755,10 +771,10 @@ function statsPatterns(list, base, a, b) {
   <div class="card"><h2>${ic('cup', 17)}Breaks<small>Paused time by reason</small></h2>${brk.n ? pie(Object.entries(brk.out).sort((x, y) => y[1] - x[1]).map(([name, v], i) => ({ name, v, fmt: fmtDur(v), color: name === 'Unspecified' ? GREY : BRK_COL[[...BREAKS, 'Other'].indexOf(name)] || PALETTE[[4, 6, 7, 5][i % 4]] }))) + `<div class="cap"><b>${brk.n}</b> breaks · <b>${fmtDur(brkTot / brk.n)}</b> average · <b>${(brk.n / list.length).toFixed(1)}</b> per session · breaks are <b>${Math.round(brkTot / (brkTot + sum(list.map(effMin))) * 100)}%</b> of clock time</div>` : '<div class="muted small">No breaks logged in this range.</div>'}</div>
   ${(() => {
     const ms = db.moods.filter(x => x.t >= a && x.t <= b); if (!ms.length) return `<div class="card"><h2>${ic('sun', 17)}Energy and mood through the day</h2><div class="muted small">Log how you feel a few times a day from the Timer screen to see when your energy and mood peak.</div></div>`;
-    const bg = [0, 1, 2, 3, 4, 5, 6, 7].map(i => ms.filter(x => Math.floor(new Date(x.t).getHours() / 3) === i)), col = k => bg.map(g => avg(g.filter(x => x[k]), x => x[k]));
+    const bg = TOD.map((_, i) => ms.filter(x => todIdx(x.t) === i)), col = k => bg.map(g => avg(g.filter(x => x[k]), x => x[k]));
     const se = [{ name: 'Energy', color: PALETTE[3], values: col('energy'), ns: bg.map(g => g.length) }, { name: 'Mood', color: PALETTE[4], values: col('mood'), ns: bg.map(g => g.length) }];
-    const pk = k => { const v = col(k); let hi = -1, lo = -1; v.forEach((x, i) => { if (x == null) return; if (hi < 0 || x > v[hi]) hi = i; if (lo < 0 || x < v[lo]) lo = i; }); return hi < 0 || hi === lo ? '' : `<b>${k[0].toUpperCase() + k.slice(1)}</b> peaks around ${fmtHour(hi * 3)}–${fmtHour((hi * 3 + 3) % 24)} and dips around ${fmtHour(lo * 3)}–${fmtHour((lo * 3 + 3) % 24)}.`; };
-    return `<div class="card"><h2>${ic('sun', 17)}Energy and mood through the day<small>From your ${ms.length} check-in${ms.length === 1 ? '' : 's'} in this range, 1–5</small></h2>${groupedBars([0, 1, 2, 3, 4, 5, 6, 7].map(i => fmtHour(i * 3)), se)}${legend(se)}<div class="cap">${[pk('energy'), pk('mood')].filter(Boolean).join(' ') || 'Check in at a few different times of day to see the pattern.'} ${smallN(ms.length)}</div></div>`;
+    const pk = k => { const v = col(k); let hi = -1, lo = -1; v.forEach((x, i) => { if (x == null) return; if (hi < 0 || x > v[hi]) hi = i; if (lo < 0 || x < v[lo]) lo = i; }); return hi < 0 || hi === lo ? '' : `<b>${k[0].toUpperCase() + k.slice(1)}</b> peaks around ${todFull(hi)} and dips around ${todFull(lo)}.`; };
+    return `<div class="card"><h2>${ic('sun', 17)}Energy and mood through the day<small>From your ${ms.length} check-in${ms.length === 1 ? '' : 's'} in this range, 1–5</small></h2>${groupedBars(TOD.map((_, i) => todShort(i)), se)}${legend(se)}<div class="cap">${[pk('energy'), pk('mood')].filter(Boolean).join(' ') || 'Check in at a few different times of day to see the pattern.'} ${smallN(ms.length)}</div></div>`;
   })()}
   <div class="card"><h2>${ic('bolt', 17)}Energy before<small>Level 1–5 at check-in → how the session went</small></h2>${lvl('energy')}</div>
   <div class="card"><h2>${ic('smile', 17)}Mood before<small>Level 1–5 at check-in → how the session went</small></h2>${lvl('mood')}</div>`;
@@ -773,7 +789,7 @@ function statsSleep(list) {
   if (sl.length < 3) return logCard + emptyState('moon', 'Log your sleep on days with at least 3 sessions in total to see how it affects your work.');
   // one night per day: the first session that day carries it
   const days = {};
-  [...list].sort((x, y) => x.start - y.start).forEach(s => { const d = days[dayKey(s.start)] ||= { min: 0, score: 0, f: 0, o: 0, n: 0, sleep: null, bed: null }; d.min += effMin(s); d.score += score(s); d.f += s.focus; d.o += s.output; d.n++; if (d.sleep == null && has(s)) { d.sleep = +s.sleep; d.bed = s.bed || null; d.sb = s.sb ?? 1; d.energy = s.energy || null; } });
+  [...list].sort((x, y) => x.start - y.start).forEach(s => { const d = days[dayKey(s.start)] ||= { min: 0, score: 0, f: 0, o: 0, n: 0, sleep: null, bed: null }; d.min += effMin(s); d.score += score(s); d.f += s.focus * effMin(s); d.o += s.output * effMin(s); d.n += effMin(s) || 1; if (d.sleep == null && has(s)) { d.sleep = +s.sleep; d.bed = s.bed || null; d.sb = s.sb ?? 1; d.energy = s.energy || null; } });
   const nights = Object.values(days).filter(d => d.sleep != null);
   const SB = [[0, 0.01, 'None'], [0.01, 4, '<4h'], [4, 5, '4–5h'], [5, 6, '5–6h'], [6, 7, '6–7h'], [7, 8, '7–8h'], [8, 9, '8–9h'], [9, 99, '9h+']];
   // how the sleep was taken: not at all, in one go, or split into blocks
@@ -795,7 +811,7 @@ function statsSleep(list) {
   const BB = [[0, 24, '<12am', 'before midnight'], [24, 25, '12–1', '12–1am'], [25, 26, '1–2', '1–2am'], [26, 27, '2–3', '2–3am'], [27, 28, '3–4', '3–4am'], [28, 29, '4–5', '4–5am'], [29, 32, '5–8', '5–8am'], [32, 99, '8am+', 'after 8am']];
   const bedS = sl.filter(s => s.bed), bedN = nights.filter(d => d.bed);
   const bg = BB.map(([lo, hi]) => bedS.filter(s => bedH(s.bed) >= lo && bedH(s.bed) < hi));
-  const bedSeries = [{ name: 'Focus', color: PALETTE[0], values: bg.map(g => avg(g, s => s.focus)), ns: bg.map(g => g.length) }, { name: 'Output', color: PALETTE[1], values: bg.map(g => avg(g, s => s.output)), ns: bg.map(g => g.length) }];
+  const bedSeries = [{ name: 'Focus', color: PALETTE[0], values: bg.map(g => wavg(g, s => s.focus)), ns: bg.map(g => g.length) }, { name: 'Output', color: PALETTE[1], values: bg.map(g => wavg(g, s => s.output)), ns: bg.map(g => g.length) }];
   const bedHours = BB.map(([lo, hi, l, full]) => { const g = bedN.filter(d => bedH(d.bed) >= lo && bedH(d.bed) < hi); return { label: l, value: g.length ? avg(g, d => d.min / 60) : null, faded: g.length < 5, tip: 'In bed ' + full + '\n' + (g.length ? avg(g, d => d.min / 60).toFixed(1) + 'h studied next day' : '–') + '\n' + g.length + ' days' }; });
   const avgBed = bedN.length ? avg(bedN, d => bedH(d.bed)) : null, clock = h => { const m = Math.round(h * 60) % 1440, hh = Math.floor(m / 60); return (hh % 12 || 12) + ':' + pad(m % 60) + (hh < 12 ? 'am' : 'pm'); };
   const kpi = (v, l) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`;
@@ -858,13 +874,13 @@ function statsGoals(base) {
 function reportCard(base) {
   const now = Date.now(), cur = base.filter(s => s.start >= now - 7 * 864e5), prev = base.filter(s => s.start >= now - 14 * 864e5 && s.start < now - 7 * 864e5);
   if (!cur.length) return '<div class="muted small">No sessions in the last 7 days.</div>';
-  const m = sum(cur.map(effMin)), pm = sum(prev.map(effMin)), fo = avg(cur, s => s.focus), pf = avg(prev, s => s.focus), ou = avg(cur, s => s.output), po = avg(prev, s => s.output);
+  const m = sum(cur.map(effMin)), pm = sum(prev.map(effMin)), fo = wavg(cur, s => s.focus), pf = wavg(prev, s => s.focus), ou = wavg(cur, s => s.output), po = wavg(prev, s => s.output);
   const top = Object.entries(cur.reduce((o, s) => (o[s.subjectId] = (o[s.subjectId] || 0) + effMin(s), o), {})).sort((x, y) => y[1] - x[1])[0];
   const combos = {}; cur.forEach(s => (combos[grpKey(s)] ||= []).push(s));
   let cl = Object.entries(combos).filter(([, g]) => g.length >= 2); if (!cl.length) cl = Object.entries(combos);
   const bc = cl.map(([k, g]) => ({ k, v: avg(g, score), n: g.length })).sort((x, y) => y.v - x.v)[0];
-  const hrs = {}; cur.forEach(s => (hrs[Math.floor(new Date(s.start).getHours() / 3)] ||= []).push(s));
-  const bt = Object.entries(hrs).map(([k, g]) => ({ k: +k, v: avg(g, s => s.focus), n: g.length })).sort((x, y) => y.v - x.v || y.n - x.n)[0];
+  const hrs = {}; cur.forEach(s => (hrs[todIdx(s.start)] ||= []).push(s));
+  const bt = Object.entries(hrs).map(([k, g]) => ({ k: +k, v: wavg(g, s => s.focus), n: g.length })).sort((x, y) => y.v - x.v || y.n - x.n)[0];
   const sc = sum(cur.map(score)), ps = sum(prev.map(score));
   const grade = fo >= 4.2 ? 'A' : fo >= 3.6 ? 'B' : fo >= 3 ? 'C' : fo >= 2.3 ? 'D' : 'E';
   return `<div class="row" style="margin-bottom:8px"><div class="grade">${grade}</div><div class="small muted">Grade from average focus (${f1(fo)}/5) over ${cur.length} sessions.</div></div>
@@ -874,7 +890,7 @@ function reportCard(base) {
     <li>Productivity Score <b>${Math.round(sc)}</b> ${prev.length ? deltaHTML(pctChange(sc, ps)) : ''}.</li>
     <li>Top subject: <b>${esc(subj(top[0]).name)}</b> (${fmtH(top[1])}).</li>
     <li>Best booster combo: <b>${esc(grpName(bc.k))}</b> — avg score ${f1(bc.v)} over ${bc.n} session${bc.n === 1 ? '' : 's'}${bc.n < 5 ? ' <span class="warn">low sample</span>' : ''}.</li>
-    <li>Best time: <b>${fmtHour(bt.k * 3)}–${fmtHour((bt.k * 3 + 3) % 24)}</b> (focus ${f1(bt.v)}).</li>
+    <li>Best time: <b>${todFull(bt.k)}</b> (focus ${f1(bt.v)}).</li>
     <li>Distractions per session: <b>${f1(avg(cur, distOf))}</b> ${prev.length ? deltaHTML(pctChange(avg(cur, distOf), avg(prev, distOf)), -1) : ''}.</li>
   </ul>`;
 }
@@ -888,7 +904,7 @@ function histList() {
   let out = '', lastDay = '';
   for (const s of list.slice(0, 300)) {
     const dk = dayKey(s.start), sb = subj(s.subjectId), ty = typ(s.typeId);
-    if (dk !== lastDay) { out += `<div class="dayh"><span>${fmtDate(s.start)}</span><span>${fmtDur(dayTot[dk])}</span></div>`; lastDay = dk; }
+    if (dk !== lastDay) { out += `<div class="dayh"><span>${fmtDate(startOfDay(s.start))}</span><span>${fmtDur(dayTot[dk])}</span></div>`; lastDay = dk; }
     out += `<button class="sess" style="--c:${sb.color}" data-a="editSession" data-v="${s.id}">
       <div class="top"><b>${esc(sb.name)}${ty.name ? ` <span class="muted" style="font-weight:400">· ${esc(ty.name)}</span>` : ''}</b><b class="dur">${fmtDur(effMin(s))}</b></div>
       <div class="meta">${fmtTime(s.start)}–${fmtTime(s.end)}${crew(s.crewId).name ? ' · ' + esc(crew(s.crewId).name) : ''}${s.task ? ' · ' + esc(s.task) : ''}</div>
@@ -900,7 +916,7 @@ function histList() {
 function viewHistory() {
   const h = ui.hist;
   return `<div class="row between"><h1>History</h1><button class="btn primary" style="min-height:40px;padding:0 14px" data-a="addSession">${ic('plus', 17)}Add</button></div>
-  ${(w => w.length ? `<div class="trio" style="margin:0 0 16px"><div>${ic('clock')}<b>${fmtH(sum(w.map(effMin)))}</b><span>this week</span></div><div>${ic('layers')}<b>${w.length}</b><span>session${w.length === 1 ? '' : 's'}</span></div><div>${ic('target')}<b>${f1(avg(w, s => s.focus))}</b><span>avg focus</span></div></div>` : '')(db.sessions.filter(s => s.start >= weekStart(Date.now())))}
+  ${(w => w.length ? `<div class="trio" style="margin:0 0 16px"><div>${ic('clock')}<b>${fmtH(sum(w.map(effMin)))}</b><span>this week</span></div><div>${ic('layers')}<b>${w.length}</b><span>session${w.length === 1 ? '' : 's'}</span></div><div>${ic('target')}<b>${f1(wavg(w, s => s.focus))}</b><span>avg focus</span></div></div>` : '')(db.sessions.filter(s => s.start >= weekStart(Date.now())))}
   <div class="search">${ic('search', 17)}<input type="search" placeholder="Search notes and tasks\" data-m="hist.q" data-live="hist" value="${esc(h.q)}"></div>
   <div class="row" style="margin:8px 0 4px"><select data-m="hist.subject" data-r>${options(db.subjects, h.subject, 'All subjects')}</select><select data-m="hist.type" data-r>${options(db.types, h.type, 'All types')}</select><select data-m="hist.tag" data-r>${tagOptions(h.tag, 'All boosters')}</select></div>
   <div id="histList">${histList()}</div>`;
@@ -1117,12 +1133,12 @@ function importFile(input) {
   r.readAsText(file); input.value = '';
 }
 function seedDemo() {
-  const now = Date.now(), R = Math.random, T = db.tags, hours = [7, 8, 9, 10, 11, 14, 15, 16, 19, 20, 21, 22], prob = [.35, .3, .3];
+  const now = Date.now(), R = Math.random, T = db.tags, hours = [7, 9, 10, 11, 14, 15, 16, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4], prob = [.35, .3, .3];
   if (!db.subjects.length) return toast('Add a subject first');
   const nights = {};
   for (let i = 0; i < 60; i++) {
     const hour = hours[Math.floor(R() * hours.length)];
-    let start = addDays(startOfDay(now), -Math.floor(R() * 45)) + hour * 3600e3 + Math.floor(R() * 40) * 60000;
+    let start = addDays(startOfDay(now), -Math.floor(R() * 45)) + ((hour - DAY_H + 24) % 24) * 3600e3 + Math.floor(R() * 40) * 60000;
     if (start > now - 4 * 3600e3) start -= 864e5;
     const night = nights[dayKey(start)] ||= (() => { const sl = Math.round((5 + R() * 4) * 2) / 2, b = Math.round((22 + R() * 4.5) * 4) / 4, hm = h => pad(Math.floor(h) % 24) + ':' + pad(Math.round(h % 1 * 60)); const r = R(); return r < .06 ? { sleep: 0, bed: null, wake: null, sb: 0, late: true } : { sleep: sl, bed: hm(b), wake: hm(b + sl), sb: r < .25 ? 2 : 1, late: b >= 25 }; })();
     const sleep = night.sleep, has = T.map((_, j) => R() < (prob[j] ?? .2));
