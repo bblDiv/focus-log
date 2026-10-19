@@ -2,7 +2,7 @@
 /* Focus Log — everything lives in localStorage under one versioned key. No network calls. */
 
 const KEY = 'focusLog';
-const SCHEMA = 6;
+const SCHEMA = 7;
 const MID_MS = 3 * 60000; // a booster added later than this counts as "mid-session"
 const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 const GREY = '#8d7f72';
@@ -74,7 +74,7 @@ function defaults() {
   return {
     schema: SCHEMA,
     subjects: mk(['Math', 'Physics', 'Computer Science', 'Writing']),
-    types: mk(['Study', 'Assignment', 'Project', 'Club work']),
+    types: mk(['Study', 'Lecture', 'Assignment', 'Project', 'Club work']),
     crews: mk(['Alone', 'Bits', 'Weband', 'Others'], ['#898781', '#3987e5', '#d95926', '#199e70']), // v5: who you studied with
     tags: mk(['N-Method', 'E-Boost', 'Music'], ['#9085e9', '#d95926', '#d55181']),
     sessions: [],
@@ -98,6 +98,7 @@ function migrate(d) {
   d.goals = Object.assign(def.goals, d.goals); d.goals.subjects ||= {};
   d.settings = Object.assign(def.settings, d.settings);
   if (!Array.isArray(d.moods)) d.moods = []; // v6: energy/mood check-ins through the day
+  if (d.schema < 7 && !d.types.some(t => /lecture/i.test(t.name))) d.types.splice(1, 0, { id: uid(), name: 'Lecture', color: PALETTE[6] }); // v7
   d.checkins ||= {}; // v4: one check-in per day, shared by that day's sessions
   d.sessions.forEach(s => { s.tags ||= []; });
   d.schema = SCHEMA;
@@ -164,7 +165,7 @@ applyTheme();
 
 const ui = {
   tipI: Math.floor(Date.now() / 864e5), // a different tip each day; tap to cycle
-  tab: 'timer', statsTab: 'overview', cmp: 'focus', pm: 'eff',
+  tab: 'timer', statsTab: 'overview', cmp: 'focus', pm: 'eff', noLect: true,
   f: { range: '30d', from: '', to: '', subject: '', type: '', tag: '' },
   hist: { subject: '', type: '', tag: '', q: '' },
   setup: false, ck: null, ckEdit: false, start: null, end: { focus: 0, output: 0, note: '', energy: 0, mood: 0 }, now: { energy: 0, mood: 0 },
@@ -649,6 +650,8 @@ const METRICS = {
 const grpKey = s => tagIds(s).sort().join('+');
 function grpName(k) { if (!k) return 'None'; const n = k.split('+').map(id => tagById(id).name); return n.length === 1 ? n[0] + ' only' : n.join(' + '); }
 function statsBoosters(list, base, a, b) {
+  const isLect = s => /lecture/i.test(typ(s.typeId).name), nLect = list.filter(isLect).length;
+  if (ui.noLect && nLect < list.length) list = list.filter(s => !isLect(s));
   const groups = new Map(); list.forEach(s => { const k = grpKey(s); (groups.get(k) || groups.set(k, []).get(k)).push(s); });
   const keys = [...groups.keys()].sort((x, y) => (x === '') ? -1 : (y === '') ? 1 : groups.get(y).length - groups.get(x).length);
   const mAvg = (g, M) => (M.w ? wavg : avg)(g, M.fn), none = groups.get('') || [], baseOf = m => none.length ? mAvg(none, METRICS[m]) : null;
@@ -686,7 +689,7 @@ function statsBoosters(list, base, a, b) {
   const totals = hBars(used.map(t => { const n = list.filter(s => tagIds(s).includes(t.id)).length; return { name: t.name, color: t.color, value: n, extra: Math.round(n / list.length * 100) + '% of sessions' }; }).sort((x, y) => y.value - x.value), v => v + '');
   const noB = '<div class="muted small">No booster sessions in this range.</div>';
 
-  return `<div class="card"><h2>${ic('chart', 17)}Compare combos<small>Average per session, vs the “None” baseline</small></h2><div class="chips" style="margin-bottom:12px">${Object.entries(METRICS).map(([k, m]) => `<button class="chip sm ${ui.cmp === k ? 'on' : ''}" data-a="set" data-keep data-path="cmp" data-v="${k}">${m.label}</button>`).join('')}</div>${bars}${none.length ? '' : '<div class="cap">No booster-free sessions in this range, so there is no baseline to compare against.</div>'}</div>
+  return `${nLect ? `<div class="chips" style="margin-bottom:12px"><button class="chip sm ${ui.noLect ? 'on' : ''}" data-a="toggleLect">${ui.noLect ? 'Lectures left out' : 'Including lectures'} (${nLect})</button><span class="small muted" style="align-self:center">Lectures carry their own energy, so they would skew the comparison.</span></div>` : ''}<div class="card"><h2>${ic('chart', 17)}Compare combos<small>Average per session, vs the “None” baseline</small></h2><div class="chips" style="margin-bottom:12px">${Object.entries(METRICS).map(([k, m]) => `<button class="chip sm ${ui.cmp === k ? 'on' : ''}" data-a="set" data-keep data-path="cmp" data-v="${k}">${m.label}</button>`).join('')}</div>${bars}${none.length ? '' : '<div class="cap">No booster-free sessions in this range, so there is no baseline to compare against.</div>'}</div>
   <div class="card"><h2>${ic('pie', 17)}Share of sessions<small>Which combos you actually use</small></h2>${pie(share)}</div>
   <div class="card"><h2>${ic('table', 17)}All numbers<small>% is the difference vs None · scroll sideways</small></h2>${table}</div>
   <div class="card"><h2>${ic('grid', 17)}Booster × subject<small>Avg focus · faded = fewer than 5 sessions</small></h2>${matrix}</div>
@@ -1288,6 +1291,7 @@ const A = {
       save(); ui.modal = { kind: 'sleeplog', data: {} }; render();
     }, 'Clear');
   },
+  toggleLect() { ui.noLect = !ui.noLect; render(); },
   nextTip() { ui.tipI++; render(); },
   // one tap: same subject, type and group as your most recent session, no boosters, no planned length
   quickStart() {
